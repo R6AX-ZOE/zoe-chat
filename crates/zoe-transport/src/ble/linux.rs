@@ -193,7 +193,11 @@ impl BleDriver for LinuxDriver {
             write_char.ok_or_else(|| BleError("write characteristic not found".to_string()))?;
         let notify_char =
             notify_char.ok_or_else(|| BleError("notify characteristic not found".to_string()))?;
-        let notify = TokioMutex::new(Box::pin(notify_char.notify().await.map_err(err)?));
+        // 先显式标注成 trait object 再包 Mutex:TokioMutex<T> 对 T 不变,
+        // 嵌套在泛型里 Box::pin 的 impl Stream 不会自动 coerce 成 dyn Stream。
+        let notify: Pin<Box<dyn futures_util::Stream<Item = Vec<u8>> + Send>> =
+            Box::pin(notify_char.notify().await.map_err(err)?);
+        let notify = TokioMutex::new(notify);
         Ok(LinuxConn::Client(LinuxClientConn {
             addr: addr.clone(),
             write_char,

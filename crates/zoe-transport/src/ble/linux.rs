@@ -53,18 +53,21 @@ impl LinuxDriver {
 // ---------------------------------------------------------------------------
 
 /// 客户端连接:远端 GATT 特性(写 + 通知流)。
+/// 通知流包 tokio Mutex:`write(&self)` 的 future 捕获 `&self`,要求本类型 Sync,
+/// 而 `dyn Stream` 本身不 Sync —— 包一层后 `TokioMutex<T: Send>` 即 Sync。
 pub struct LinuxClientConn {
     addr: BleAddr,
     write_char: bluer::gatt::remote::Characteristic,
-    notify: Pin<Box<dyn futures_util::Stream<Item = Vec<u8>> + Send>>,
+    notify: TokioMutex<Pin<Box<dyn futures_util::Stream<Item = Vec<u8>> + Send>>>,
 }
 
 /// 服务端连接:远端设备对本地特性的写入流 + 通知器槽位。
+/// 写入流包 tokio Mutex(理由同上:`mpsc::Receiver` 不 Sync)。
 /// 槽位用 tokio Mutex(guard 可跨 await 保持 Send)且与全局共享同一 Arc:
 /// "先订阅后写入"与"先写入后订阅"两种顺序都可用。
 pub struct LinuxServerConn {
     addr: BleAddr,
-    writes: mpsc::Receiver<Vec<u8>>,
+    writes: TokioMutex<mpsc::Receiver<Vec<u8>>>,
     notifier: Arc<TokioMutex<Option<bluer::gatt::local::CharacteristicNotifier>>>,
 }
 
@@ -84,7 +87,7 @@ impl BleConn for LinuxConn {
     async fn write(&self, frame: &[u8]) -> Result<(), BleError> {
         match self {
             LinuxConn::Client(c) => {
-                // 克隆出特性再 await,避免 &self 跨 await(conn 含非 Sync 的 Stream)
+                // 克隆出特性再 await,避免把整个 conn 借入 future
                 let ch = c.write_char.clone();
                 ch.write(frame).await.map_err(err)
             }
@@ -101,8 +104,14 @@ impl BleConn for LinuxConn {
 
     async fn read(&mut self) -> Result<Option<Vec<u8>>, BleError> {
         match self {
-            LinuxConn::Client(c) => Ok(c.notify.next().await),
-            LinuxConn::Server(s) => Ok(s.writes.recv().await),
+            LinuxConn::Client(c) => {
+                let mut notify = c.notify.lock().await;
+                Ok(notify.next().await)
+            }
+            LinuxConn::Server(s) => {
+                let mut writes = s.writes.lock().await;
+                Ok(writes.recv().await)
+            }
         }
     }
 }
@@ -184,7 +193,7 @@ impl BleDriver for LinuxDriver {
             write_char.ok_or_else(|| BleError("write characteristic not found".to_string()))?;
         let notify_char =
             notify_char.ok_or_else(|| BleError("notify characteristic not found".to_string()))?;
-        let notify = Box::pin(notify_char.notify().await.map_err(err)?);
+        let notify = TokioMutex::new(Box::pin(notify_char.notify().await.map_err(err)?));
         Ok(LinuxConn::Client(LinuxClientConn {
             addr: addr.clone(),
             write_char,
@@ -204,7 +213,7 @@ impl BleDriver for LinuxDriver {
         type NotifierSlot = Arc<TokioMutex<Option<bluer::gatt::local::CharacteristicNotifier>>>;
         type Entry = (
             mpsc::Sender<Vec<u8>>,
-            Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
+            Mutex<Option<TokioMutex<mpsc::Receiver<Vec<u8>>>>>,
             NotifierSlot,
         );
         let shared: NotifierSlot = Arc::new(TokioMutex::new(None));
@@ -231,7 +240,7 @@ impl BleDriver for LinuxDriver {
                             let mut map = state.lock().unwrap();
                             let entry = map.entry(key.clone()).or_insert_with(|| {
                                 let (tx, rx) = mpsc::channel(128);
-                                (tx, Mutex::new(Some(rx)), shared.clone())
+                                (tx, Mutex::new(Some(TokioMutex::new(rx))), shared.clone())
                             });
                             let tx = entry.0.clone();
                             // 首次写入:取走写帧接收端(交付 ServerConn)
@@ -262,7 +271,7 @@ impl BleDriver for LinuxDriver {
             notify: Some(CharacteristicNotify {
                 notify: true,
                 method: CharacteristicNotifyMethod::Fun(Box::new(
-                    |notifier: bluer::gatt::local::CharacteristicNotifier| {
+                    move |notifier: bluer::gatt::local::CharacteristicNotifier| {
                         let shared = Arc::clone(&shared_for_notify);
                         async move {
                             *shared.lock().await = Some(notifier);

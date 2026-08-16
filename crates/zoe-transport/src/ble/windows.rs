@@ -105,6 +105,123 @@ impl WindowsDriver {
         }
     }
 
+    /// 诊断:适配器 / 无线电状态 / 广播能力 / 最小载荷广播实测。
+    /// 用 `zoe-cli ble diag` 调用;用于定位 Start() 的 E_INVALIDARG 类问题。
+    pub async fn diag() -> String {
+        use btleplug::api::Central as _;
+        let mut out = String::new();
+        out.push_str("== zoe-cli ble diag (Windows) ==\n");
+
+        // 1) 适配器(btleplug 视角)
+        match Manager::new().await {
+            Ok(manager) => match manager.adapters().await {
+                Ok(adapters) if adapters.is_empty() => {
+                    out.push_str("[适配器] 未找到蓝牙适配器\n");
+                }
+                Ok(adapters) => {
+                    for (i, a) in adapters.iter().enumerate() {
+                        let info = a
+                            .adapter_info()
+                            .await
+                            .unwrap_or_else(|e| format!("<{e}>"));
+                        let state = a
+                            .adapter_state()
+                            .await
+                            .unwrap_or(btleplug::api::CentralState::Unknown);
+                        out.push_str(&format!("[适配器 {}] {info} | 状态: {state:?}\n", i + 1));
+                    }
+                }
+                Err(e) => out.push_str(&format!("[适配器] 枚举失败: {e}\n")),
+            },
+            Err(e) => out.push_str(&format!("[适配器] 初始化失败: {e}\n")),
+        }
+
+        // 2) 无线电状态
+        match Self::radio_state().await {
+            Ok(Some(state)) => out.push_str(&format!("[无线电] 蓝牙无线电状态: {state:?}\n")),
+            Ok(None) => out.push_str("[无线电] 未找到蓝牙无线电(虚拟/直通适配器?)\n"),
+            Err(e) => out.push_str(&format!("[无线电] 查询失败: {e}\n")),
+        }
+
+        // 3) 适配器能力(系统视角)
+        match Self::adapter_capabilities().await {
+            Ok(caps) => out.push_str(&caps),
+            Err(e) => out.push_str(&format!("[能力] 查询失败: {e}\n")),
+        }
+
+        // 4) 最小载荷广播实测(仅服务 UUID,21B)
+        out.push_str("[实测] 尝试最小载荷广播(仅服务 UUID)...\n");
+        match Self::try_start(SERVICE_UUID, None, false) {
+            Ok(p) => {
+                let mut status = "未知";
+                for _ in 0..10 {
+                    match p.Status() {
+                        Ok(s) => {
+                            status = match s.0 {
+                                2 => "Started(广播已激活)",
+                                0 => "Aborted(被系统中止,通常是不支持广播)",
+                                4 => "Stopped(停止)",
+                                1 => "Waiting(等待中)",
+                                _ => "未知",
+                            };
+                            if s.0 == 0 || s.0 == 2 || s.0 == 4 {
+                                break;
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                out.push_str(&format!("[实测] 广播状态: {status}\n"));
+                if status.starts_with("Started") {
+                    out.push_str("[实测] 手机此时应能扫描到本机(服务 UUID 7a5e0001-2e4c-4a31-9b6c-3c2a0e5f6a01)\n");
+                }
+                let _ = p.Stop();
+            }
+            Err(e) => out.push_str(&format!("[实测] Start() 失败: {e}\n")),
+        }
+
+        out
+    }
+
+    /// 查询蓝牙无线电状态(不改动);无蓝牙无线电时返回 None。
+    async fn radio_state() -> Result<Option<windows::Devices::Radios::RadioState>, String> {
+        use windows::Devices::Radios::{Radio, RadioKind};
+        let radios = Self::wait_async(&Radio::GetRadiosAsync().map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let count = radios.Size().map_err(|e| e.to_string())?;
+        for i in 0..count {
+            let radio = radios.GetAt(i).map_err(|e| e.to_string())?;
+            if radio.Kind().map_err(|e| e.to_string())? == RadioKind::Bluetooth {
+                return Ok(Some(radio.State().map_err(|e| e.to_string())?));
+            }
+        }
+        Ok(None)
+    }
+
+    /// 系统视角的适配器广播能力(Devices.Bluetooth)。
+    async fn adapter_capabilities() -> Result<String, String> {
+        use windows::Devices::Bluetooth::BluetoothAdapter;
+        let adapter = Self::wait_async(
+            &BluetoothAdapter::GetDefaultAsync().map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        let le = adapter.IsLowEnergySupported().map_err(|e| e.to_string())?;
+        let periph = adapter
+            .IsPeripheralRoleSupported()
+            .map_err(|e| e.to_string())?;
+        let central = adapter
+            .IsCentralRoleSupported()
+            .map_err(|e| e.to_string())?;
+        let ext = adapter
+            .IsExtendedAdvertisingSupported()
+            .map_err(|e| e.to_string())?;
+        Ok(format!(
+            "[能力] LE: {le} | 外设角色(广播): {periph} | 中央角色: {central} | 扩展广播: {ext}\n\
+             [能力] 外设角色为 false 时,系统会拒绝任何广播(Start 报 0x80070057 参数错误)\n"
+        ))
+    }
+
     /// 查找蓝牙无线电;关闭时尝试开启(需系统允许,否则返回提示)。
     async fn ensure_radio_on() -> Result<(), String> {
         use windows::Devices::Radios::{Radio, RadioKind, RadioState};
@@ -213,7 +330,8 @@ impl BleDriver for WindowsDriver {
                 Ok(())
             }
             Err(e) => Err(BleError(format!(
-                "publisher start failed: {e} (prior: {prior}fallback without name)"
+                "publisher start failed: {e} (prior: {prior}fallback without name); \
+                 运行 `zoe-cli ble diag` 查看适配器能力与无线电状态"
             ))),
         }
     }

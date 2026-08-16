@@ -31,6 +31,13 @@ use zoe_transport::ble::linux::LinuxDriver as PlatformDriver;
 use zoe_transport::ble::windows::WindowsDriver as PlatformDriver;
 
 pub async fn cmd_ble(args: &[String]) {
+    // Windows 诊断子命令:适配器/无线电/广播能力/最小载荷实测(无需先建驱动)
+    #[cfg(all(feature = "ble-windows", windows))]
+    if args.get(2).map(String::as_str) == Some("diag") {
+        println!("{}", PlatformDriver::diag().await);
+        return;
+    }
+
     let sub = match args.get(2).map(String::as_str) {
         Some(s @ ("adv" | "scan" | "connect")) => s,
         Some(other) => {
@@ -62,6 +69,8 @@ fn usage() {
          \x20 zoe-cli ble scan [--timeout SECS]\n\
          \x20 zoe-cli ble connect <MAC> [--send HEX] [--timeout SECS]"
     );
+    #[cfg(all(feature = "ble-windows", windows))]
+    eprintln!("\x20 zoe-cli ble diag                    (Windows:适配器/无线电/广播能力诊断)");
 }
 
 fn opt_val(args: &[String], key: &str, default: &str) -> String {

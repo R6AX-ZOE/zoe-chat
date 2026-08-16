@@ -25,6 +25,7 @@ bluer = { version = "0.17", optional = true }
 [target.'cfg(windows)'.dependencies]
 btleplug = { version = "0.12", optional = true }
 windows = { version = "0.62", features = [
+  "Devices_Bluetooth",
   "Devices_Bluetooth_Advertisement",
   "Devices_Bluetooth_GenericAttributeProfile",
   "Devices_Radios",

@@ -85,7 +85,8 @@ impl Envelope {
         seq: u64,
         payload: &[u8],
     ) -> Vec<u8> {
-        let mut out = Vec::with_capacity(1 + 1 + 1 + 1 + group_id.len() + 4 + 4 + 8 + 4 + payload.len());
+        let mut out =
+            Vec::with_capacity(1 + 1 + 1 + 1 + group_id.len() + 4 + 4 + 8 + 4 + payload.len());
         assert!(group_id.len() <= MAX_GROUP_ID_LEN, "group_id too long");
         assert!(payload.len() <= MAX_PAYLOAD_LEN, "payload too long");
         out.push(VERSION);
@@ -140,7 +141,7 @@ impl Envelope {
         if !r.is_done() {
             return Err(EnvelopeError::Truncated);
         }
-        let body = Self::encode_body(flags, msg_type, &group_id, epoch, sender, seq, &payload);
+        let body = Self::encode_body(flags, msg_type, group_id, epoch, sender, seq, payload);
         let expect: [u8; HASH_LEN] = Sha256::digest(&body).into();
         if hash != expect {
             return Err(EnvelopeError::HashMismatch);

@@ -15,11 +15,6 @@
 //! 帧格式见 docs/envelope.md §2.1:
 //!   [magic 0x5A | msg_id 8 | ttl 1 | chunk_idx 1 | total 2 | data ≤499]
 
-#![cfg(any(
-    all(feature = "ble-linux", target_os = "linux"),
-    all(feature = "ble-windows", windows)
-))]
-
 use std::time::{Duration, Instant};
 
 use zoe_transport::ble::{
@@ -126,22 +121,16 @@ async fn cmd_adv<D: BleDriver>(args: &[String], driver: D) {
         Ok(mut rx) => {
             while let Some(mut conn) = rx.recv().await {
                 let addr = conn.peer_addr().to_mac();
-                let echo = echo;
                 println!("[conn] peer connected: {addr}");
                 tokio::spawn(async move {
-                    loop {
-                        match conn.read().await {
-                            Ok(Some(frame)) => {
-                                print_frame("rx", &addr, &frame);
-                                if echo {
-                                    if let Err(e) = conn.write(&frame).await {
-                                        eprintln!("[tx] {addr} echo failed: {e}");
-                                        break;
-                                    }
-                                    println!("[tx] {addr} echoed {}B", frame.len());
-                                }
+                    while let Ok(Some(frame)) = conn.read().await {
+                        print_frame("rx", &addr, &frame);
+                        if echo {
+                            if let Err(e) = conn.write(&frame).await {
+                                eprintln!("[tx] {addr} echo failed: {e}");
+                                break;
                             }
-                            Ok(None) | Err(_) => break,
+                            println!("[tx] {addr} echoed {}B", frame.len());
                         }
                     }
                     println!("[conn] peer disconnected: {addr}");
@@ -175,7 +164,8 @@ async fn cmd_scan<D: BleDriver>(args: &[String], driver: D) {
                 println!("no BLE devices found (确认对端已开始广播、适配器已开启)");
                 return;
             }
-            println!("{:<22} {}", "ADDRESS", "NAME");
+            let (addr_h, name_h) = ("ADDRESS", "NAME");
+            println!("{addr_h:<22} {name_h}");
             for p in peers {
                 println!("{:<22} {}", p.addr.to_mac(), p.name);
             }

@@ -8,10 +8,8 @@
 //!   E_INVALIDARG;适配器/无线电/载荷均正常时同样失败,已用 ble diag 验证)。
 //!   若确需 Windows 广播,只能走 MSIX 打包 + 管理员信任证书路线(本项目不提供);
 //! - 被连接(GATT server)同样需 UWP(GattServiceProvider),不可用。
-//! 真机联调拓扑见 docs/termux-ble.md:手机 nRF Connect 模拟 peripheral,
-//! Windows `zoe-cli ble scan/connect` 或电脑 Chrome Web Bluetooth 做 central。
-
-#![cfg(all(feature = "ble-windows", windows))]
+//!   真机联调拓扑见 docs/termux-ble.md:手机 zoe App 模拟 peripheral,
+//!   Windows `zoe-cli ble scan/connect` 或电脑 Chrome Web Bluetooth 做 central。
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -26,8 +24,7 @@ use tokio::sync::mpsc;
 use windows::Devices::Bluetooth::Advertisement::BluetoothLEAdvertisementPublisher;
 
 use crate::ble::{
-    BleAddr, BleConn, BleDriver, BleError, BlePeer, NOTIFY_CHAR_UUID, SERVICE_UUID,
-    WRITE_CHAR_UUID,
+    BleAddr, BleConn, BleDriver, BleError, BlePeer, NOTIFY_CHAR_UUID, SERVICE_UUID, WRITE_CHAR_UUID,
 };
 
 fn err(e: impl std::fmt::Display) -> BleError {
@@ -121,10 +118,7 @@ impl WindowsDriver {
                 }
                 Ok(adapters) => {
                     for (i, a) in adapters.iter().enumerate() {
-                        let info = a
-                            .adapter_info()
-                            .await
-                            .unwrap_or_else(|e| format!("<{e}>"));
+                        let info = a.adapter_info().await.unwrap_or_else(|e| format!("<{e}>"));
                         let state = a
                             .adapter_state()
                             .await
@@ -160,20 +154,17 @@ impl WindowsDriver {
             Ok(p) => {
                 let mut status = "未知";
                 for _ in 0..10 {
-                    match p.Status() {
-                        Ok(s) => {
-                            status = match s.0 {
-                                2 => "Started(广播已激活)",
-                                0 => "Aborted(被系统中止,通常是不支持广播)",
-                                4 => "Stopped(停止)",
-                                1 => "Waiting(等待中)",
-                                _ => "未知",
-                            };
-                            if s.0 == 0 || s.0 == 2 || s.0 == 4 {
-                                break;
-                            }
+                    if let Ok(s) = p.Status() {
+                        status = match s.0 {
+                            2 => "Started(广播已激活)",
+                            0 => "Aborted(被系统中止,通常是不支持广播)",
+                            4 => "Stopped(停止)",
+                            1 => "Waiting(等待中)",
+                            _ => "未知",
+                        };
+                        if s.0 == 0 || s.0 == 2 || s.0 == 4 {
+                            break;
                         }
-                        Err(_) => {}
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }
@@ -207,10 +198,9 @@ impl WindowsDriver {
     /// 系统视角的适配器广播能力(Devices.Bluetooth)。
     async fn adapter_capabilities() -> Result<String, String> {
         use windows::Devices::Bluetooth::BluetoothAdapter;
-        let adapter = Self::wait_async(
-            &BluetoothAdapter::GetDefaultAsync().map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
+        let adapter =
+            Self::wait_async(&BluetoothAdapter::GetDefaultAsync().map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
         let le = adapter.IsLowEnergySupported().map_err(|e| e.to_string())?;
         let periph = adapter
             .IsPeripheralRoleSupported()
@@ -372,14 +362,17 @@ impl BleDriver for WindowsDriver {
                 notify_char = Some(ch.clone());
             }
         }
-        let write_char = write_char.ok_or_else(|| BleError("write characteristic missing".to_string()))?;
-        let notify_char = notify_char.ok_or_else(|| BleError("notify characteristic missing".to_string()))?;
+        let write_char =
+            write_char.ok_or_else(|| BleError("write characteristic missing".to_string()))?;
+        let notify_char =
+            notify_char.ok_or_else(|| BleError("notify characteristic missing".to_string()))?;
 
         peripheral.subscribe(&notify_char).await.map_err(err)?;
 
         // 通知流 → mpsc(按特性 UUID 过滤)
         let (tx, rx) = mpsc::channel(128);
-        let mut notifications = peripheral.notifications().await.map_err(err)?;        tokio::spawn(async move {
+        let mut notifications = peripheral.notifications().await.map_err(err)?;
+        tokio::spawn(async move {
             while let Some(ValueNotification { uuid, value, .. }) = notifications.next().await {
                 if uuid == NOTIFY_CHAR_UUID {
                     let _ = tx.try_send(value);

@@ -284,7 +284,9 @@ impl ZoeStorage {
 
     pub fn groups(&self) -> Result<Vec<GroupRecord>, StorageError> {
         let conn = self.db.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT group_id, name, epoch, coordinator, created_at FROM groups ORDER BY created_at")?;
+        let mut stmt = conn.prepare(
+            "SELECT group_id, name, epoch, coordinator, created_at FROM groups ORDER BY created_at",
+        )?;
         let rows = stmt.query_map([], |r| {
             Ok(GroupRecord {
                 group_id: r.get(0)?,
@@ -526,7 +528,10 @@ pub fn encrypt_seed(
     let ct = cipher
         .encrypt(
             &Nonce::try_from(&nonce_bytes[..]).map_err(|_| StorageError::Aead)?,
-            Payload { msg: seed, aad: b"zoe-chat-identity-v1" },
+            Payload {
+                msg: seed,
+                aad: b"zoe-chat-identity-v1",
+            },
         )
         .map_err(|_| StorageError::Aead)?;
     let mut out = Vec::with_capacity(salt.len() + nonce_bytes.len() + ct.len());
@@ -549,8 +554,11 @@ pub fn decrypt_seed(blob: &[u8], password: &str) -> Result<[u8; 32], StorageErro
     let cipher = ChaCha20Poly1305::new(&Key::try_from(&key[..]).map_err(|_| StorageError::Aead)?);
     let pt = cipher
         .decrypt(
-            &Nonce::try_from(&nonce[..]).map_err(|_| StorageError::Aead)?,
-            Payload { msg: ct, aad: b"zoe-chat-identity-v1" },
+            &Nonce::try_from(nonce).map_err(|_| StorageError::Aead)?,
+            Payload {
+                msg: ct,
+                aad: b"zoe-chat-identity-v1",
+            },
         )
         .map_err(|_| StorageError::Aead)?;
     if pt.len() != 32 {
@@ -591,10 +599,32 @@ mod tests {
         let s = ZoeStorage::new(db);
         let gid = b"group-1".to_vec();
         s.create_group(&gid, "test", 3, None, 1).unwrap();
-        s.insert_message(b"hash1", b"env1", &gid, 3, Some(b"sender"), Some(1), 0, 0, Some(b"hi"), 10)
-            .unwrap();
-        s.insert_message(b"hash2", b"env2", &gid, 3, Some(b"sender"), Some(2), 0, 0, Some(b"yo"), 11)
-            .unwrap();
+        s.insert_message(
+            b"hash1",
+            b"env1",
+            &gid,
+            3,
+            Some(b"sender"),
+            Some(1),
+            0,
+            0,
+            Some(b"hi"),
+            10,
+        )
+        .unwrap();
+        s.insert_message(
+            b"hash2",
+            b"env2",
+            &gid,
+            3,
+            Some(b"sender"),
+            Some(2),
+            0,
+            0,
+            Some(b"yo"),
+            11,
+        )
+        .unwrap();
         let msgs = s.messages(&gid, 100, None).unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].plaintext.as_deref(), Some(b"hi".as_slice()));

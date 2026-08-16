@@ -66,8 +66,7 @@ impl IdentityKeyPair {
 
     /// 导出为 24 词助记词(种子即 BIP39 熵)。
     pub fn to_mnemonic(&self) -> String {
-        let mnemonic =
-            Mnemonic::from_entropy(&self.seed()).expect("32B entropy is valid");
+        let mnemonic = Mnemonic::from_entropy(&self.seed()).expect("32B entropy is valid");
         mnemonic.to_string()
     }
 
@@ -115,6 +114,10 @@ mod tests {
         let msg = b"pairing handshake";
         let sig = id.sign(msg);
         assert!(IdentityKeyPair::verify(&id.verifying_key(), msg, &sig));
-        assert!(!IdentityKeyPair::verify(&id.verifying_key(), b"tampered", &sig));
+        assert!(!IdentityKeyPair::verify(
+            &id.verifying_key(),
+            b"tampered",
+            &sig
+        ));
     }
 }

@@ -40,7 +40,15 @@ async fn dial_and_exchange_envelopes() {
     );
 
     // a → b 信封
-    let env = Envelope::new(0, MSG_PRIVATE, b"g1".to_vec(), 1, 0, 7, b"hello over libp2p".to_vec());
+    let env = Envelope::new(
+        0,
+        MSG_PRIVATE,
+        b"g1".to_vec(),
+        1,
+        0,
+        7,
+        b"hello over libp2p".to_vec(),
+    );
     a.send(&b_peer, env.clone()).await.expect("send");
     let inbound = tokio::time::timeout(Duration::from_secs(10), b_rx.recv())
         .await
@@ -51,7 +59,15 @@ async fn dial_and_exchange_envelopes() {
 
     // b → a 信封(反向)
     let mut a_rx = a.subscribe();
-    let env2 = Envelope::new(0, MSG_PRIVATE, b"g1".to_vec(), 1, 1, 8, b"reply over libp2p".to_vec());
+    let env2 = Envelope::new(
+        0,
+        MSG_PRIVATE,
+        b"g1".to_vec(),
+        1,
+        1,
+        8,
+        b"reply over libp2p".to_vec(),
+    );
     b.send(&a.local_peer_id().to_string(), env2.clone())
         .await
         .expect("send back");

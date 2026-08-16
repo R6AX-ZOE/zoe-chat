@@ -9,10 +9,7 @@
 //!
 //! 需要 feature `net`(默认开启)。
 
-#![cfg(feature = "net")]
-
 use std::collections::HashMap;
-use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -50,9 +47,10 @@ impl Behaviour {
             ),
             mdns: mdns::tokio::Behaviour::new(mdns::Config::default(), key.public().to_peer_id())?,
             dcutr: dcutr::Behaviour::new(key.public().to_peer_id()),
-            identify: identify::Behaviour::new(
-                identify::Config::new("zoe-chat/0.1".to_string(), key.public()),
-            ),
+            identify: identify::Behaviour::new(identify::Config::new(
+                "zoe-chat/0.1".to_string(),
+                key.public(),
+            )),
         })
     }
 }
@@ -136,8 +134,8 @@ impl Transport for NetTransport {
         self.inner.connected.lock().unwrap().clone()
     }
 
-    fn dial(&self, addr: &str) -> impl Future<Output = Result<(), TransportError>> + Send {
-        async move { NetTransport::dial(self, addr).await }
+    async fn dial(&self, addr: &str) -> Result<(), TransportError> {
+        NetTransport::dial(self, addr).await
     }
 
     async fn send(&self, to: &str, envelope: Envelope) -> Result<(), TransportError> {
@@ -167,11 +165,8 @@ async fn run_swarm(keypair: Keypair, mut commands: mpsc::Receiver<Command>, inne
 
     // 监听 IPv4 与 IPv6 的随机端口
     for addr in ["/ip4/0.0.0.0/tcp/0", "/ip6/::/tcp/0"] {
-        match addr.parse::<Multiaddr>() {
-            Ok(m) => {
-                let _ = swarm.listen_on(m);
-            }
-            Err(_) => {}
+        if let Ok(m) = addr.parse::<Multiaddr>() {
+            let _ = swarm.listen_on(m);
         }
     }
 
@@ -260,7 +255,7 @@ fn build_swarm(
         )
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     let builder = builder
-        .with_behaviour(|key| Behaviour::new(key))
+        .with_behaviour(Behaviour::new)
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
     Ok(builder
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(120)))

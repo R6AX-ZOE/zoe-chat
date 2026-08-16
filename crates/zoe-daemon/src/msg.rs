@@ -8,7 +8,9 @@
 //! - CONTROL   → keypackage 请求应答 / 群组元数据(group_meta)
 
 use serde_json::json;
-use zoe_core::envelope::{Envelope, MSG_COMMIT, MSG_CONTROL, MSG_KEY_PACKAGE, MSG_PRIVATE, MSG_PROPOSAL, MSG_WELCOME};
+use zoe_core::envelope::{
+    Envelope, MSG_COMMIT, MSG_CONTROL, MSG_KEY_PACKAGE, MSG_PRIVATE, MSG_PROPOSAL, MSG_WELCOME,
+};
 use zoe_core::mls::{MlsSession, Processed};
 use zoe_transport::Transport;
 
@@ -46,9 +48,9 @@ pub fn handle_inbound(state: &SharedState, from: &str, env: &Envelope) {
                         Some(&plaintext),
                         now(),
                     );
-                    let _ = state.events.send(
-                        json!({"type":"message","group_id":hex::encode(gid)}).to_string(),
-                    );
+                    let _ = state
+                        .events
+                        .send(json!({"type":"message","group_id":hex::encode(gid)}).to_string());
                 }
                 Ok(Processed::GroupChange) => {
                     let epoch = sessions_epoch(state, gid);
@@ -62,25 +64,24 @@ pub fn handle_inbound(state: &SharedState, from: &str, env: &Envelope) {
                 }
             }
         }
-        MSG_WELCOME => {
-            match MlsSession::join(&*state.provider.lock().unwrap(), &env.payload) {
-                Ok(session) => {
-                    let epoch = session.epoch();
-                    state.sessions.lock().unwrap().insert(gid.clone(), session);
-                    let _ = state.storage.create_group(
-                        gid,
-                        &format!("group-{}", &hex::encode(gid)[..8]),
-                        epoch,
-                        None,
-                        now(),
-                    );
-                    let _ = state.events.send(
-                        json!({"type":"group","event":"joined","group_id":hex::encode(gid)}).to_string(),
-                    );
-                }
-                Err(e) => eprintln!("inbound {from}: welcome join failed: {e}"),
+        MSG_WELCOME => match MlsSession::join(&*state.provider.lock().unwrap(), &env.payload) {
+            Ok(session) => {
+                let epoch = session.epoch();
+                state.sessions.lock().unwrap().insert(gid.clone(), session);
+                let _ = state.storage.create_group(
+                    gid,
+                    &format!("group-{}", &hex::encode(gid)[..8]),
+                    epoch,
+                    None,
+                    now(),
+                );
+                let _ = state.events.send(
+                    json!({"type":"group","event":"joined","group_id":hex::encode(gid)})
+                        .to_string(),
+                );
             }
-        }
+            Err(e) => eprintln!("inbound {from}: welcome join failed: {e}"),
+        },
         MSG_KEY_PACKAGE => {
             if let Some(tx) = state.pending_keypackages.lock().unwrap().remove(from) {
                 let _ = tx.send(env.payload.clone());
@@ -126,7 +127,8 @@ fn handle_control(state: &SharedState, from: &str, env: &Envelope) {
             if let Some(name) = v.get("name").and_then(|x| x.as_str()) {
                 let _ = state.storage.set_group_name(&env.group_id, name);
                 let _ = state.events.send(
-                    json!({"type":"group","event":"renamed","group_id":hex::encode(&env.group_id)}).to_string(),
+                    json!({"type":"group","event":"renamed","group_id":hex::encode(&env.group_id)})
+                        .to_string(),
                 );
             }
         }
@@ -182,13 +184,16 @@ pub async fn invite_peer(
         .ok_or_else(|| "net transport not available".to_string())?;
 
     // 解析目标 peer id
-    let peer = peer_id_from_addr(addr).ok_or_else(|| {
-        format!("multiaddr must include /p2p/<peer-id>: {addr}")
-    })?;
+    let peer = peer_id_from_addr(addr)
+        .ok_or_else(|| format!("multiaddr must include /p2p/<peer-id>: {addr}"))?;
 
     // 注册 KeyPackage 等待
     let (tx, rx) = tokio::sync::oneshot::channel();
-    state.pending_keypackages.lock().unwrap().insert(peer.clone(), tx);
+    state
+        .pending_keypackages
+        .lock()
+        .unwrap()
+        .insert(peer.clone(), tx);
 
     // 拨号 + 发送 kp_req
     net.dial(addr).await.map_err(|e| e.to_string())?;
@@ -225,8 +230,18 @@ pub async fn invite_peer(
     let _ = state.storage.update_group_epoch(group_id, epoch);
 
     // 发送 WELCOME 给新成员
-    let welcome_env = Envelope::new(0, MSG_WELCOME, group_id.to_vec(), epoch as u32, 0, 0, welcome);
-    net.send(&peer, welcome_env).await.map_err(|e| e.to_string())?;
+    let welcome_env = Envelope::new(
+        0,
+        MSG_WELCOME,
+        group_id.to_vec(),
+        epoch as u32,
+        0,
+        0,
+        welcome,
+    );
+    net.send(&peer, welcome_env)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 发送群组元数据(名称)
     let name = state

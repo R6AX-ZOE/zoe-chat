@@ -9,10 +9,7 @@ use zoe_core::storage::{Db, ZoeProvider, ZoeStorage};
 
 fn tmp_dir(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!(
-        "zoe-test-{tag}-{}",
-        std::process::id()
-    ));
+    p.push(format!("zoe-test-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&p).unwrap();
     p
 }
@@ -31,7 +28,8 @@ fn group_session_persists_across_reload() {
         let bob = MlsIdentity::new("bob", &[0xBB; 32]).unwrap();
         let group_id = b"persist-group";
 
-        let mut alice_session = MlsSession::create_group(&alice_provider, &alice, group_id).unwrap();
+        let mut alice_session =
+            MlsSession::create_group(&alice_provider, &alice, group_id).unwrap();
         let bob_kp = MlsSession::key_package_from_bytes(
             &bob_provider,
             &MlsSession::new_key_package(&bob_provider, &bob).unwrap(),

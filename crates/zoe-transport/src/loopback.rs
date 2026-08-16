@@ -23,7 +23,10 @@ impl LoopbackHub {
     /// 注册一个地址,返回对应传输端。
     pub fn attach(self: &Arc<Self>, addr: &str) -> LoopbackTransport {
         let (tx, _rx) = broadcast::channel(256);
-        self.peers.lock().unwrap().insert(addr.to_string(), tx.clone());
+        self.peers
+            .lock()
+            .unwrap()
+            .insert(addr.to_string(), tx.clone());
         LoopbackTransport {
             addr: addr.to_string(),
             hub: Arc::clone(self),

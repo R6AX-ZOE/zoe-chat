@@ -170,8 +170,10 @@ async fn import_card(State(state): State<SharedState>, Json(req): Json<ImportReq
     let mut parts = rest.split('/');
     let peer_id_hex = parts.next().unwrap_or_default();
     let fp_hex = parts.next().unwrap_or_default();
-    let peer_id = hex::decode(peer_id_hex).map_err(|_| ApiError::BadRequest("bad peer id".to_string()))?;
-    let fp = hex::decode(fp_hex).map_err(|_| ApiError::BadRequest("bad fingerprint".to_string()))?;
+    let peer_id =
+        hex::decode(peer_id_hex).map_err(|_| ApiError::BadRequest("bad peer id".to_string()))?;
+    let fp =
+        hex::decode(fp_hex).map_err(|_| ApiError::BadRequest("bad fingerprint".to_string()))?;
     let display = format!("peer-{}", &peer_id_hex[..peer_id_hex.len().min(8)]);
     state
         .storage
@@ -225,16 +227,22 @@ async fn groups_list(State(state): State<SharedState>) -> ApiResult {
     Ok(Json(json!(out)))
 }
 
-async fn create_group(State(state): State<SharedState>, Json(req): Json<CreateGroupReq>) -> ApiResult {
+async fn create_group(
+    State(state): State<SharedState>,
+    Json(req): Json<CreateGroupReq>,
+) -> ApiResult {
     let name = req.name.trim().to_string();
     if name.is_empty() || name.len() > 64 {
-        return Err(ApiError::BadRequest("name must be 1..=64 chars".to_string()));
+        return Err(ApiError::BadRequest(
+            "name must be 1..=64 chars".to_string(),
+        ));
     }
     let mut gid = [0u8; 16];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut gid);
     {
         let provider = state.provider.lock().unwrap();
-        let session = MlsSession::create_group(&*provider, &state.mls_identity, &gid).map_err(internal)?;
+        let session =
+            MlsSession::create_group(&*provider, &state.mls_identity, &gid).map_err(internal)?;
         let epoch = session.epoch();
         let members = session.members();
         state.sessions.lock().unwrap().insert(gid.to_vec(), session);
@@ -242,7 +250,9 @@ async fn create_group(State(state): State<SharedState>, Json(req): Json<CreateGr
             .storage
             .create_group(&gid, &name, epoch, None, now())
             .map_err(internal)?;
-        let _ = state.events.send(json!({"type":"group","event":"created"}).to_string());
+        let _ = state
+            .events
+            .send(json!({"type":"group","event":"created"}).to_string());
         Ok(Json(json!({
             "group_id": hex::encode(gid),
             "name": name,
@@ -300,7 +310,9 @@ async fn send_message(
 ) -> ApiResult {
     let text = req.text.trim().to_string();
     if text.is_empty() || text.len() > 4096 {
-        return Err(ApiError::BadRequest("text must be 1..=4096 chars".to_string()));
+        return Err(ApiError::BadRequest(
+            "text must be 1..=4096 chars".to_string(),
+        ));
     }
     let gid = decode_group_id(&gid_hex)?;
 
@@ -323,7 +335,7 @@ async fn send_message(
             .map_err(internal)?
             .into_iter()
             .filter_map(|m| m.seq)
-            .last()
+            .next_back()
             .unwrap_or(0);
         let seq = last + 1;
         let env = Envelope::new(0, MSG_PRIVATE, gid.clone(), epoch as u32, 0, seq, ct);
@@ -334,9 +346,23 @@ async fn send_message(
 
     state
         .storage
-        .insert_message(&hash, &env_bytes, &gid, epoch, None, Some(seq), 1, 0, Some(text.as_bytes()), now())
+        .insert_message(
+            &hash,
+            &env_bytes,
+            &gid,
+            epoch,
+            None,
+            Some(seq),
+            1,
+            0,
+            Some(text.as_bytes()),
+            now(),
+        )
         .map_err(internal)?;
-    state.storage.update_group_epoch(&gid, epoch).map_err(internal)?;
+    state
+        .storage
+        .update_group_epoch(&gid, epoch)
+        .map_err(internal)?;
     let _ = state
         .events
         .send(json!({"type":"message","group_id":gid_hex}).to_string());
@@ -379,7 +405,9 @@ async fn restore(State(state): State<SharedState>, Json(req): Json<RestoreReq>) 
         .map_err(internal)?;
     // 注意:设备 MLS 凭据派生自旧身份种子,恢复后重启即与旧群组脱离;
     // 需重新扫码授权/被邀请(见 docs/protocol.md §5)。
-    Ok(Json(json!({ "ok": true, "note": "identity restored; re-invite devices to groups" })))
+    Ok(Json(
+        json!({ "ok": true, "note": "identity restored; re-invite devices to groups" }),
+    ))
 }
 
 #[derive(Deserialize, Default)]
@@ -394,7 +422,10 @@ async fn get_settings(State(state): State<SharedState>) -> ApiResult {
     Ok(Json(json!({ "ui_theme": theme, "ui_language": lang })))
 }
 
-async fn post_settings(State(state): State<SharedState>, Json(req): Json<SettingsReq>) -> ApiResult {
+async fn post_settings(
+    State(state): State<SharedState>,
+    Json(req): Json<SettingsReq>,
+) -> ApiResult {
     if let Some(t) = req.ui_theme {
         if matches!(t.as_str(), "light" | "dark" | "system") {
             state.storage.set_meta("ui_theme", &t).map_err(internal)?;
@@ -402,7 +433,10 @@ async fn post_settings(State(state): State<SharedState>, Json(req): Json<Setting
     }
     if let Some(l) = req.ui_language {
         if matches!(l.as_str(), "zh-CN" | "en-US") {
-            state.storage.set_meta("ui_language", &l).map_err(internal)?;
+            state
+                .storage
+                .set_meta("ui_language", &l)
+                .map_err(internal)?;
         }
     }
     get_settings(State(state)).await
@@ -439,7 +473,9 @@ async fn net_addr(State(state): State<SharedState>) -> ApiResult {
                 "listen_addrs": addrs,
             })))
         }
-        None => Err(ApiError::NotFound("net transport not available".to_string())),
+        None => Err(ApiError::NotFound(
+            "net transport not available".to_string(),
+        )),
     }
 }
 
@@ -530,7 +566,10 @@ pub fn router(state: SharedState) -> Router {
         .route("/card/import", post(import_card))
         .route("/peers", get(peers_list))
         .route("/groups", get(groups_list).post(create_group))
-        .route("/groups/{id}/messages", get(list_messages).post(send_message))
+        .route(
+            "/groups/{id}/messages",
+            get(list_messages).post(send_message),
+        )
         .route("/groups/{id}/invite", post(invite))
         .route("/net/addr", get(net_addr))
         .route("/net/dial", post(net_dial))

@@ -130,8 +130,7 @@ impl MlsSession {
 
     /// 加入群组(消费 Welcome 消息)。
     pub fn join(provider: &impl OpenMlsProvider, welcome: &[u8]) -> Result<Self, MlsError> {
-        let (msg, _rest) =
-            MlsMessageIn::tls_deserialize_bytes(&mut &welcome[..]).map_err(str_err)?;
+        let (msg, _rest) = MlsMessageIn::tls_deserialize_bytes(welcome).map_err(str_err)?;
         let welcome = match msg.extract() {
             MlsMessageBodyIn::Welcome(w) => w,
             _ => return Err(MlsError::NotWelcome),
@@ -155,7 +154,7 @@ impl MlsSession {
     ) -> Result<(Vec<u8>, Vec<u8>, u64), MlsError> {
         let (commit, welcome, _group_info) = self
             .group
-            .add_members(provider, id.signer(), &[kp.clone()])
+            .add_members(provider, id.signer(), std::slice::from_ref(kp))
             .map_err(str_err)?;
         let commit_bytes = commit.tls_serialize_detached().map_err(str_err)?;
         let welcome_bytes = welcome.tls_serialize_detached().map_err(str_err)?;
@@ -217,7 +216,7 @@ impl MlsSession {
         provider: &impl OpenMlsProvider,
         bytes: &[u8],
     ) -> Result<Processed, MlsError> {
-        let (msg, _rest) = MlsMessageIn::tls_deserialize_bytes(&mut &bytes[..]).map_err(str_err)?;
+        let (msg, _rest) = MlsMessageIn::tls_deserialize_bytes(bytes).map_err(str_err)?;
         let proto = msg.try_into_protocol_message().map_err(str_err)?;
         let processed = self
             .group
@@ -242,8 +241,8 @@ impl MlsSession {
         provider: &impl OpenMlsProvider,
         group_id: &[u8],
     ) -> Result<Option<MlsSession>, MlsError> {
-        let group = MlsGroup::load(provider.storage(), &GroupId::from_slice(group_id))
-            .map_err(str_err)?;
+        let group =
+            MlsGroup::load(provider.storage(), &GroupId::from_slice(group_id)).map_err(str_err)?;
         Ok(group.map(|group| Self { group }))
     }
 

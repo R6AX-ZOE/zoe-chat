@@ -5,8 +5,6 @@
 //!   通知即出站帧 —— 每远端设备一个 `LinuxConn`。
 //! 注:真机验证需 Linux + 蓝牙适配器(CI 无硬件,仅编译验证)。
 
-#![cfg(all(feature = "ble-linux", target_os = "linux"))]
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -137,7 +135,9 @@ impl BleDriver for LinuxDriver {
         loop {
             match tokio::time::timeout(timeout, devices.next()).await {
                 Ok(Some(bluer::AdapterEvent::DeviceAdded(addr))) => {
-                    let Ok(device) = self.adapter.device(addr) else { continue };
+                    let Ok(device) = self.adapter.device(addr) else {
+                        continue;
+                    };
                     let name = device.name().await.unwrap_or_default();
                     // 统一为 6 字节 MAC 表示(与 windows.rs 一致)
                     if let Ok(baddr) = BleAddr::from_mac_str(&addr.to_string()) {
@@ -171,8 +171,10 @@ impl BleDriver for LinuxDriver {
                 }
             }
         }
-        let write_char = write_char.ok_or_else(|| BleError("write characteristic not found".to_string()))?;
-        let notify_char = notify_char.ok_or_else(|| BleError("notify characteristic not found".to_string()))?;
+        let write_char =
+            write_char.ok_or_else(|| BleError("write characteristic not found".to_string()))?;
+        let notify_char =
+            notify_char.ok_or_else(|| BleError("notify characteristic not found".to_string()))?;
         let notify = Box::pin(notify_char.notify().await.map_err(err)?);
         Ok(LinuxConn::Client(LinuxClientConn {
             addr: addr.clone(),
@@ -208,43 +210,42 @@ impl BleDriver for LinuxDriver {
             write: Some(CharacteristicWrite {
                 write: true,
                 write_without_response: true,
-                method: CharacteristicWriteMethod::Fun(Box::new(
-                    move |value, req| {
-                        let state = Arc::clone(&write_state);
-                        let orphan = Arc::clone(&orphan_for_write);
-                        let incoming = incoming_for_write.clone();
-                        async move {
-                            let key = req.device_address.to_string();
-                            let addr = BleAddr::from_mac_str(&key).unwrap_or_else(|_| BleAddr(key.as_bytes().to_vec()));
-                            let (tx, rx_slot, notifier) = {
-                                let mut map = state.lock().unwrap();
-                                map.entry(key.clone())
-                                    .or_insert_with(|| {
-                                        let (tx, rx) = mpsc::channel(128);
-                                        // 先订阅后写入:把订阅阶段暂存的孤儿 notifier 移入
-                                        let slot = Arc::new(Mutex::new(None));
-                                        if let Some(n) = orphan.lock().unwrap().take() {
-                                            *slot.lock().unwrap() = Some(n);
-                                        }
-                                        (tx, Mutex::new(Some(rx)), slot)
-                                    })
-                                    .clone()
-                            };
-                            let _ = tx.try_send(value);
-                            // 首次写入:交付 ServerConn(持有该设备的写帧接收端)
-                            let mut slot = rx_slot.lock().unwrap();
-                            if let Some(rx) = slot.take() {
-                                let _ = incoming.try_send(LinuxConn::Server(LinuxServerConn {
-                                    addr,
-                                    writes: rx,
-                                    notifier,
-                                }));
-                            }
-                            Ok(())
+                method: CharacteristicWriteMethod::Fun(Box::new(move |value, req| {
+                    let state = Arc::clone(&write_state);
+                    let orphan = Arc::clone(&orphan_for_write);
+                    let incoming = incoming_for_write.clone();
+                    async move {
+                        let key = req.device_address.to_string();
+                        let addr = BleAddr::from_mac_str(&key)
+                            .unwrap_or_else(|_| BleAddr(key.as_bytes().to_vec()));
+                        let (tx, rx_slot, notifier) = {
+                            let mut map = state.lock().unwrap();
+                            map.entry(key.clone())
+                                .or_insert_with(|| {
+                                    let (tx, rx) = mpsc::channel(128);
+                                    // 先订阅后写入:把订阅阶段暂存的孤儿 notifier 移入
+                                    let slot = Arc::new(Mutex::new(None));
+                                    if let Some(n) = orphan.lock().unwrap().take() {
+                                        *slot.lock().unwrap() = Some(n);
+                                    }
+                                    (tx, Mutex::new(Some(rx)), slot)
+                                })
+                                .clone()
+                        };
+                        let _ = tx.try_send(value);
+                        // 首次写入:交付 ServerConn(持有该设备的写帧接收端)
+                        let mut slot = rx_slot.lock().unwrap();
+                        if let Some(rx) = slot.take() {
+                            let _ = incoming.try_send(LinuxConn::Server(LinuxServerConn {
+                                addr,
+                                writes: rx,
+                                notifier,
+                            }));
                         }
-                        .boxed()
-                    },
-                )),
+                        Ok(())
+                    }
+                    .boxed()
+                })),
                 ..Default::default()
             }),
             ..Default::default()
@@ -287,7 +288,11 @@ impl BleDriver for LinuxDriver {
             ..Default::default()
         };
 
-        let _app_handle = self.adapter.serve_gatt_application(app).await.map_err(err)?;
+        let _app_handle = self
+            .adapter
+            .serve_gatt_application(app)
+            .await
+            .map_err(err)?;
         Ok(incoming_rx)
     }
 }

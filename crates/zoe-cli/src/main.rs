@@ -84,7 +84,8 @@ fn cmd_init(args: &[String]) {
 fn cmd_fingerprint(args: &[String]) {
     let dir = data_dir(args);
     let path = dir.join(IDENTITY_FILE);
-    let text = std::fs::read_to_string(&path).expect("read identity.json (run `zoe-cli init` first)");
+    let text =
+        std::fs::read_to_string(&path).expect("read identity.json (run `zoe-cli init` first)");
     for line in text.lines() {
         if line.contains("fingerprint_hex") {
             println!("{}", line.trim());

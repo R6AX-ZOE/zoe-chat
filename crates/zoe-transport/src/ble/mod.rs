@@ -116,7 +116,10 @@ pub trait BleDriver: Send + Sync + 'static {
     fn driver_name(&self) -> &'static str;
     fn start_advertising(&self, name: &str) -> impl Future<Output = Result<(), BleError>> + Send;
     fn stop_advertising(&self) -> impl Future<Output = Result<(), BleError>> + Send;
-    fn scan(&self, timeout: Duration) -> impl Future<Output = Result<Vec<BlePeer>, BleError>> + Send;
+    fn scan(
+        &self,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<Vec<BlePeer>, BleError>> + Send;
     fn connect(&self, addr: &BleAddr) -> impl Future<Output = Result<Self::Conn, BleError>> + Send;
     fn listen(&self) -> impl Future<Output = Result<mpsc::Receiver<Self::Conn>, BleError>> + Send;
 }
@@ -126,9 +129,12 @@ pub trait BleDriver: Send + Sync + 'static {
 // ---------------------------------------------------------------------------
 
 pub fn frame_chunks(msg_id: [u8; 8], ttl: u8, data: &[u8]) -> Result<Vec<Vec<u8>>, BleError> {
-    let total = ((data.len() + MAX_DATA_PER_FRAME - 1) / MAX_DATA_PER_FRAME) as u16;
+    let total = data.len().div_ceil(MAX_DATA_PER_FRAME) as u16;
     if total == 0 || total > MAX_TOTAL_CHUNKS {
-        return Err(BleError(format!("envelope too large: {} bytes", data.len())));
+        return Err(BleError(format!(
+            "envelope too large: {} bytes",
+            data.len()
+        )));
     }
     let mut out = Vec::with_capacity(total as usize);
     for (i, chunk) in data.chunks(MAX_DATA_PER_FRAME).enumerate() {
@@ -180,7 +186,10 @@ pub fn parse_frame(frame: &[u8]) -> Result<(FrameHeader, &[u8]), BleError> {
 
 enum RouterCmd {
     /// 发送分片到指定邻居(None = 广播到全部)。
-    Send { to: Option<String>, frames: Vec<Vec<u8>> },
+    Send {
+        to: Option<String>,
+        frames: Vec<Vec<u8>>,
+    },
 }
 
 struct Reassembly {
@@ -482,7 +491,10 @@ impl MockHub {
             incoming: Mutex::new(None),
             pending_incoming: Mutex::new(Vec::new()),
         });
-        self.nodes.lock().unwrap().insert(addr.to_string(), Arc::clone(&d));
+        self.nodes
+            .lock()
+            .unwrap()
+            .insert(addr.to_string(), Arc::clone(&d));
         d
     }
 }
@@ -554,7 +566,8 @@ impl BleDriver for MockDriver {
     }
 
     async fn connect(&self, addr: &BleAddr) -> Result<Self::Conn, BleError> {
-        let target = String::from_utf8(addr.0.clone()).map_err(|_| BleError("bad mock addr".to_string()))?;
+        let target =
+            String::from_utf8(addr.0.clone()).map_err(|_| BleError("bad mock addr".to_string()))?;
         let (a_tx, b_rx) = mpsc::channel(128);
         let (b_tx, a_rx) = mpsc::channel(128);
         // 对端入站:已监听则直投,否则入队(锁内 try_send,避免跨 await 持锁)
@@ -726,7 +739,11 @@ mod tests {
         while !b.peers().contains(&hex_of("A")) && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert!(b.peers().contains(&hex_of("A")), "B 未发现 A 邻居: {:?}", b.peers());
+        assert!(
+            b.peers().contains(&hex_of("A")),
+            "B 未发现 A 邻居: {:?}",
+            b.peers()
+        );
 
         let env = env_with(9);
         a.send("*", env.clone()).await.unwrap();

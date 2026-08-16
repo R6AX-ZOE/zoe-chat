@@ -44,7 +44,11 @@ pub trait Transport: Send + Sync {
     fn availability(&self) -> Availability;
     /// 当前可达邻居地址。
     fn peers(&self) -> Vec<String>;
-    fn send(&self, to: &str, envelope: Envelope) -> impl Future<Output = Result<(), TransportError>> + Send;
+    fn send(
+        &self,
+        to: &str,
+        envelope: Envelope,
+    ) -> impl Future<Output = Result<(), TransportError>> + Send;
     /// 手动拨号(默认不支持;libp2p 等远程传输实现)。
     fn dial(&self, addr: &str) -> impl Future<Output = Result<(), TransportError>> + Send {
         async move {

@@ -196,10 +196,16 @@ impl BleDriver for LinuxDriver {
             Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
             Arc<Mutex<Option<bluer::gatt::local::CharacteristicNotifier>>>,
         );
+        // 孤儿通知器:客户端"先订阅通知、后首次写入"时,订阅回调里还没有该
+        // 设备的条目,notifier 暂存于此;首次写入建条目时移入条目槽位。
+        // 真机 GATT 客户端(nRF Connect / Web Bluetooth)普遍先订阅再写。
+        let orphan: Arc<Mutex<Option<bluer::gatt::local::CharacteristicNotifier>>> =
+            Arc::new(Mutex::new(None));
         let state: Arc<Mutex<HashMap<String, Entry>>> = Arc::new(Mutex::new(HashMap::new()));
 
         // 写入特性:客户端写入即入站帧
         let write_state = Arc::clone(&state);
+        let orphan_for_write = Arc::clone(&orphan);
         let incoming_for_write = incoming_tx.clone();
         let write_char = Characteristic {
             uuid: WRITE_CHAR_UUID,
@@ -209,6 +215,7 @@ impl BleDriver for LinuxDriver {
                 method: CharacteristicWriteMethod::Fun(Box::new(
                     move |value, req| {
                         let state = Arc::clone(&write_state);
+                        let orphan = Arc::clone(&orphan_for_write);
                         let incoming = incoming_for_write.clone();
                         async move {
                             let addr = req.device_address.to_string();
@@ -217,7 +224,12 @@ impl BleDriver for LinuxDriver {
                                 map.entry(addr.clone())
                                     .or_insert_with(|| {
                                         let (tx, rx) = mpsc::channel(128);
-                                        (tx, Mutex::new(Some(rx)), Arc::new(Mutex::new(None)))
+                                        // 先订阅后写入:把订阅阶段暂存的孤儿 notifier 移入
+                                        let slot = Arc::new(Mutex::new(None));
+                                        if let Some(n) = orphan.lock().unwrap().take() {
+                                            *slot.lock().unwrap() = Some(n);
+                                        }
+                                        (tx, Mutex::new(Some(rx)), slot)
                                     })
                                     .clone()
                             };
@@ -241,8 +253,10 @@ impl BleDriver for LinuxDriver {
             ..Default::default()
         };
 
-        // 通知特性:客户端订阅时把 notifier 存入各设备槽位(供 ServerConn 写)
+        // 通知特性:客户端订阅时把 notifier 存入各设备槽位(供 ServerConn 写),
+        // 并暂存到孤儿槽位(尚无设备条目时,等首次写入建条目后移入)。
         let notify_state = Arc::clone(&state);
+        let orphan_for_notify = Arc::clone(&orphan);
         let notify_char = Characteristic {
             uuid: NOTIFY_CHAR_UUID,
             notify: Some(CharacteristicNotify {
@@ -250,11 +264,13 @@ impl BleDriver for LinuxDriver {
                 method: CharacteristicNotifyMethod::Fun(Box::new(
                     |notifier: bluer::gatt::local::CharacteristicNotifier| {
                         let state = Arc::clone(&notify_state);
+                        let orphan = Arc::clone(&orphan_for_notify);
                         async move {
                             let map = state.lock().unwrap();
                             for (_, (_, _, slot)) in map.iter() {
                                 *slot.lock().unwrap() = Some(notifier.clone());
                             }
+                            *orphan.lock().unwrap() = Some(notifier);
                         }
                         .boxed()
                     },

@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>zoe-chat BLE GATT 联调台</title>
+<style>
+  :root {
+    --bg: #101418; --panel: #1a2026; --line: #2a323a; --fg: #d8dee4;
+    --dim: #8b96a1; --acc: #4aa3ff; --ok: #3ecf8e; --err: #ff6b6b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f7fa; --panel: #ffffff; --line: #dde3ea; --fg: #1c2733;
+      --dim: #5c6b7a; --acc: #1a73e8; --ok: #0f9d58; --err: #d93025;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    padding: calc(12px + env(safe-area-inset-top)) 14px calc(20px + env(safe-area-inset-bottom));
+  }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 16px; }
+  section {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; margin-bottom: 14px;
+  }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  label { display: block; font-size: 13px; color: var(--dim); margin: 8px 0 4px; }
+  input[type=text], textarea {
+    width: 100%; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; font-size: 14px;
+  }
+  textarea { font-family: var(--mono); font-size: 13px; min-height: 64px; resize: vertical; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  button {
+    min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--fg); font-size: 14px; cursor: pointer; flex: 1 1 auto;
+  }
+  button.primary { background: var(--acc); border-color: var(--acc); color: #fff; font-weight: 600; }
+  button.danger { border-color: var(--err); color: var(--err); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .status { font-size: 13px; margin-top: 10px; word-break: break-all; }
+  .status .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+  .dot.off { background: var(--dim); } .dot.on { background: var(--ok); } .dot.err { background: var(--err); }
+  #log {
+    font-family: var(--mono); font-size: 12px; line-height: 1.7;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px; height: 240px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  }
+  .tx { color: var(--acc); } .rx { color: var(--ok); } .ev { color: var(--dim); } .er { color: var(--err); }
+  .rtt { color: var(--acc); font-weight: 600; }
+  .meta { font-size: 12px; color: var(--dim); margin-top: 10px; line-height: 1.9; }
+  code { font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>zoe-chat BLE GATT 联调台</h1>
+<div class="sub">真机链路测试:对端 Linux 运行 <code>zoe-cli ble adv --echo</code> 后,在本页连接并收发帧</div>
+
+<section>
+  <h2>连接</h2>
+  <label for="namePrefix">设备名前缀(留空则按服务 UUID 过滤)</label>
+  <input type="text" id="namePrefix" placeholder="zoe-">
+  <div class="row">
+    <button id="btnScan" class="primary">扫描并连接</button>
+    <button id="btnDisconnect" class="danger" disabled>断开</button>
+  </div>
+  <div class="status" id="status"><span class="dot off" id="dot"></span><span id="statusText">未连接</span></div>
+</section>
+
+<section>
+  <h2>发送帧(hex)</h2>
+  <textarea id="txHex" placeholder="例如 5a0102030405060708 01 00 0001 68656c6c6f …"></textarea>
+  <div class="row">
+    <button id="btnGen" class="primary">生成测试帧</button>
+    <button id="btnGenA">分片帧 A(第 1/2 片)</button>
+    <button id="btnGenB">分片帧 B(第 2/2 片)</button>
+  </div>
+  <div class="row">
+    <button id="btnSend">发送</button>
+    <button id="btnEcho">echo 往返测试</button>
+    <button id="btnClear">清空输入</button>
+  </div>
+  <div class="status">最近一次 echo 往返:<span class="rtt" id="rtt"> -</span></div>
+</section>
+
+<section>
+  <h2>日志</h2>
+  <div class="row"><button id="btnClearLog">清空日志</button></div>
+  <div id="log"></div>
+</section>
+
+<section class="meta">
+  服务 <code>7a5e0001-2e4c-4a31-9b6c-3c2a-0e5f-6a01</code> ·
+  写 <code>7a5e0002-…</code> · 通知 <code>7a5e0003-…</code><br>
+  帧格式 <code>[5A | msg_id 8B | ttl 1B | chunk_idx 1B | total 2B | data ≤499B]</code><br>
+  前提:Android Chrome(需开启蓝牙与"附近设备"权限);Windows/macOS Chrome 亦可。<br>
+  常见问题:扫描不到 → 确认对端正在广播、权限已授、屏幕亮起;写入报错 → 检查 MTU 与帧长 ≤ 512B。
+</section>
+
+<script>
+"use strict";
+const SERVICE_UUID = "7a5e0001-2e4c-4a31-9b6c-3c2a-0e5f-6a01";
+const WRITE_UUID   = "7a5e0002-2e4c-4a31-9b6c-3c2a-0e5f-6a01";
+const NOTIFY_UUID  = "7a5e0003-2e4c-4a31-9b6c-3c2a-0e5f-6a01";
+const MAX_DATA = 499;
+
+let device = null, server = null, writeChar = null, notifyChar = null, echoWaiter = null;
+
+const $ = id => document.getElementById(id);
+const logBox = $("log");
+
+function log(cls, text) {
+  const line = document.createElement("div");
+  line.className = cls;
+  const t = new Date().toTimeString().slice(0, 8);
+  line.textContent = `[${t}] ${text}`;
+  logBox.appendChild(line);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function setStatus(text, state) {
+  $("statusText").textContent = text;
+  const dot = $("dot");
+  dot.className = "dot " + (state || "off");
+}
+
+function hexToBytes(hex) {
+  const s = hex.replace(/[^0-9a-fA-F]/g, "");
+  if (s.length % 2) throw new Error("hex 长度必须为偶数");
+  const out = new Uint8Array(s.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.substr(i * 2, 2), 16);
+  return out;
+}
+
+function bytesToHex(b) {
+  return Array.from(b).map(x => x.toString(16).padStart(2, "0")).join(" ");
+}
+
+function randomMsgId() {
+  const a = new Uint8Array(8);
+  crypto.getRandomValues(a);
+  return a;
+}
+
+/** 构造一帧: [5A | msg_id 8 | ttl 1 | chunk_idx 1 | total 2 | data] */
+function buildFrame(payloadHex, chunkIdx, total, msgId) {
+  const head = [0x5A, ...(msgId || randomMsgId()), 0x01, chunkIdx, (total >> 8) & 0xff, total & 0xff];
+  return new Uint8Array([...head, ...hexToBytes(payloadHex)]);
+}
+
+function describeFrame(bytes) {
+  if (bytes.length < 13 || bytes[0] !== 0x5a) {
+    return `原始 ${bytes.length}B`;
+  }
+  const msgId = bytesToHex(bytes.slice(1, 9)).replace(/ /g, "");
+  const ttl = bytes[9], idx = bytes[10], total = (bytes[11] << 8) | bytes[12];
+  return `帧 msg_id=${msgId} ttl=${ttl} 片 ${idx + 1}/${total} 数据 ${bytes.length - 13}B`;
+}
+
+async function sendBytes(bytes) {
+  if (!writeChar) throw new Error("未连接,无法发送");
+  await writeChar.writeValueWithResponse(bytes);
+  log("tx", `TX ${bytes.length}B ${bytesToHex(bytes)} — ${describeFrame(bytes)}`);
+}
+
+function toHex(bytes) {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function genTestFrame() {
+  const payload = new TextEncoder().encode("hello from phone - zoe ble link test");
+  $("txHex").value = bytesToHex(buildFrame(toHex(payload), 0, 1));
+}
+
+function genChunk(i) {
+  // 600B 载荷 → 两片(499 + 101),模拟 MeshOverlay 大包分片
+  const payload = new Uint8Array(600);
+  for (let n = 0; n < 600; n++) payload[n] = 0x41 + (n % 26);
+  const data = payload.slice(i * MAX_DATA, (i + 1) * MAX_DATA);
+  $("txHex").value = bytesToHex(buildFrame(toHex(data), i, 2));
+  log("ev", `已生成分片 ${i + 1}/2(数据 ${data.length}B)写入输入框`);
+}
+
+async function echoTest() {
+  if (!writeChar || !notifyChar) { log("er", "请先连接并订阅通知"); return; }
+  const bytes = buildFrame(toHex(new TextEncoder().encode("echo")), 0, 1);
+  const t0 = performance.now();
+  echoWaiter = { hex: toHex(bytes), t0 };
+  await sendBytes(bytes);
+  log("ev", "已发送 echo 帧,等待回显 …");
+}
+
+async function connect() {
+  try {
+    if (!navigator.bluetooth) {
+      throw new Error("此浏览器不支持 Web Bluetooth,请用 Android Chrome 或桌面 Chrome 打开");
+    }
+    const prefix = $("namePrefix").value.trim();
+    const options = prefix
+      ? { filters: [{ namePrefix: prefix, services: [SERVICE_UUID] }] }
+      : { filters: [{ services: [SERVICE_UUID] }] };
+    setStatus("正在请求设备…(系统弹窗选择)", "on");
+    device = await navigator.bluetooth.requestDevice(options);
+    setStatus(`已选 ${device.name || device.id},连接中…`, "on");
+    server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    writeChar = await service.getCharacteristic(WRITE_UUID);
+    notifyChar = await service.getCharacteristic(NOTIFY_UUID);
+    await notifyChar.startNotifications();
+    notifyChar.addEventListener("characteristicvaluechanged", onNotify);
+    $("btnScan").disabled = true;
+    $("btnDisconnect").disabled = false;
+    setStatus(`已连接 ${device.name || device.id}:服务/写/通知特性就绪,通知已订阅`, "on");
+    log("ev", `CONNECT ${device.name || device.id} OK`);
+  } catch (e) {
+    setStatus("连接失败: " + e.message, "err");
+    log("er", "CONNECT FAIL " + e.message);
+  }
+}
+
+function onNotify(ev) {
+  const bytes = new Uint8Array(ev.target.value.buffer);
+  const hex = bytesToHex(bytes).replace(/ /g, "");
+  log("rx", `RX ${bytes.length}B ${hex} — ${describeFrame(bytes)}`);
+  if (echoWaiter && hex === echoWaiter.hex) {
+    const ms = Math.round(performance.now() - echoWaiter.t0);
+    $("rtt").textContent = ` ${ms} ms`;
+    log("ev", `echo 往返 ${ms} ms ✓`);
+    echoWaiter = null;
+  }
+}
+
+async function disconnect() {
+  try { await server && server.disconnect(); } catch (e) { /* ignore */ }
+  device = null; server = null; writeChar = null; notifyChar = null; echoWaiter = null;
+  $("btnScan").disabled = false;
+  $("btnDisconnect").disabled = true;
+  setStatus("未连接", "off");
+  log("ev", "DISCONNECT");
+}
+
+$("btnScan").addEventListener("click", connect);
+$("btnDisconnect").addEventListener("click", disconnect);
+$("btnSend").addEventListener("click", async () => {
+  try { await sendBytes(hexToBytes($("txHex").value)); }
+  catch (e) { log("er", "TX FAIL " + e.message); }
+});
+$("btnEcho").addEventListener("click", async () => {
+  try { await echoTest(); }
+  catch (e) { log("er", "ECHO FAIL " + e.message); }
+});
+$("btnGen").addEventListener("click", genTestFrame);
+$("btnGenA").addEventListener("click", () => genChunk(0));
+$("btnGenB").addEventListener("click", () => genChunk(1));
+$("btnClear").addEventListener("click", () => { $("txHex").value = ""; });
+$("btnClearLog").addEventListener("click", () => { logBox.innerHTML = ""; });
+log("ev", "ready - 对端请运行: zoe-cli ble adv --echo");
+</script>
+</body>
+</html>

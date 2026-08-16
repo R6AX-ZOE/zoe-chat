@@ -4,10 +4,14 @@ version.workspace = true
 edition.workspace = true
 description = "zoe-chat debug CLI (M0)"
 
+[features]
+# Linux BLE 真机联调子命令(ble adv/scan/connect),见 docs/termux-ble.md
+ble-linux = ["zoe-transport/ble-linux"]
+
 [dependencies]
 zoe-core = { path = "../zoe-core" }
 zoe-transport = { path = "../zoe-transport" }
 openmls_rust_crypto = "=0.5.1"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 hex = "0.4"
 rand = "0.8"

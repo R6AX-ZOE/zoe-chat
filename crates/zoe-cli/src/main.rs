@@ -4,6 +4,7 @@
 //!   init [--dir PATH]       生成身份,写入 identity.json(seed/指纹/助记词)
 //!   fingerprint [--dir PATH] 打印本机身份指纹
 //!   demo                    双节点 loopback 演示:配对→建群→双向消息→update
+//!   ble <adv|scan|connect>  BLE 真机联调(Linux,feature ble-linux,见 docs/termux-ble.md)
 
 use std::path::PathBuf;
 
@@ -13,6 +14,9 @@ use zoe_core::identity::IdentityKeyPair;
 use zoe_core::mls::{MlsIdentity, MlsSession, Processed};
 use zoe_transport::loopback::LoopbackHub;
 use zoe_transport::Transport;
+
+#[cfg(all(feature = "ble-linux", target_os = "linux"))]
+mod ble;
 
 const IDENTITY_FILE: &str = "identity.json";
 
@@ -24,6 +28,11 @@ fn main() {
         Some("demo") => {
             let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
             rt.block_on(cmd_demo());
+        }
+        #[cfg(all(feature = "ble-linux", target_os = "linux"))]
+        Some("ble") => {
+            let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+            rt.block_on(ble::cmd_ble(&args));
         }
         Some(other) => {
             eprintln!("unknown subcommand: {other}");

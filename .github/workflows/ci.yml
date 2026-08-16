@@ -65,5 +65,9 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo check -p zoe-transport --no-default-features --features ble-linux
 
+      - name: Check Linux BLE CLI (ubuntu only)
+        if: runner.os == 'Linux'
+        run: cargo check -p zoe-cli --features ble-linux
+
       - name: Build release
         run: cargo build --release --workspace

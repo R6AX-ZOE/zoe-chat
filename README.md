@@ -14,6 +14,7 @@
 **M2(近场)✅ 驱动待真机验证**
 - `BleDriver` trait + `MeshOverlay`:BLE GATT 网状覆盖(分片/重组、去重、TTL 存储转发),mock 驱动 5 项测试通过
 - 驱动:bluer(Linux,CI 编译验证)、btleplug + windows-rs(Windows,本机编译验证;广告角色受 SDK 绑定限制暂缺)
+- 真机联调工具:`zoe-cli ble adv|scan|connect`(Linux)、`scripts/termux/`(Android 扫描/构建)、`tools/ble-gatt-test/`(手机 Chrome Web Bluetooth GATT 测试页),流程见 [docs/termux-ble.md](docs/termux-ble.md)
 
 **M3(远程)✅**
 - libp2p 远程通道:手动拨号 + mDNS 发现 + DCUtR 打洞,noise 用身份密钥(与 QR 名片同钥)
@@ -37,14 +38,33 @@ cargo run -p zoe-daemon -- --data-dir zoe-data
 # 可选参数:--port N(固定端口)、--token STR(指定令牌)
 ```
 
+## BLE 真机联调(Termux)
+
+另一台 Android 手机(Termux)参与 BLE 真机联调的完整流程见 [docs/termux-ble.md](docs/termux-ble.md)。
+快速开始:
+
+```sh
+# Linux 节点(peripheral,需蓝牙适配器)
+cargo build -p zoe-cli --features ble-linux
+target/debug/zoe-cli ble adv --name zoe-device --echo
+
+# 手机 Termux:安装环境 → 扫描验证广播
+bash scripts/termux/setup-termux.sh
+bash scripts/termux/ble-scan.sh --filter zoe --count 3
+
+# 手机 Chrome 打开 tools/ble-gatt-test/index.html → 连接 zoe-device → 发帧/echo 测试
+```
+
 ## 目录结构
 
 ```
 crates/
 ├─ zoe-core/      身份 · 信封 · MLS 会话 · SQLite 存储
-├─ zoe-transport/ 传输抽象 + loopback
-├─ zoe-cli/       调试 CLI
+├─ zoe-transport/ 传输抽象 + loopback + BLE GATT 覆盖网(平台驱动)
+├─ zoe-cli/       调试 CLI(含 BLE 联调子命令,Linux)
 └─ zoe-daemon/    HTTP/WS 守护进程 + 内嵌 UI
 webui/            UI 源码(TypeScript)→ dist(编译产物,内嵌进守护进程)
-docs/             协议与接口规格
+tools/ble-gatt-test/  手机端 Web Bluetooth GATT 测试页(单文件,无构建)
+scripts/termux/   Termux 联调脚本:setup/ble-scan/build/run-daemon
+docs/             协议与接口规格(含 docs/termux-ble.md 真机联调指南)
 ```

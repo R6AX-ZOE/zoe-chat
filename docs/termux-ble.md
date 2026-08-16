@@ -211,6 +211,7 @@ Android 内核未编译 BlueZ 驱动、控制器被厂商 HAL 独占。仅当设
 | 找不到手机的"蓝牙地址" | Android 广播用的是随机私有地址(RPA),与手机设置里的蓝牙地址不同,且重启广播后可能变化;以扫描结果为准,连接前重新扫描 |
 | 扫描不到端广播 | 对端广播未启动(nRF Connect Advertiser 要运行);两台设备距离过远;信道拥堵换位置;手机与 Windows 已配对时部分系统会屏蔽其广播(设置里删除配对) |
 | Chrome 弹窗里没有 zoe-device | 页面按服务 UUID 过滤,对端必须广播我们的 `SERVICE_UUID`(nRF Connect Advertiser 里添加;`ble adv` 已内置);或改名前缀过滤 |
+| 连接报 `peripheral not found` | Windows 下 btleplug 只能连接被扫描发现过的设备;`ble connect` 已内置 20s 扫描等待,仍失败 = 对端未在广播或 RPA 已变(重新 `ble scan` 取最新 ⭐ 地址) |
 | 写特性报错 | MTU 不足(Android 通常协商 517B,帧 ≤512B);连错设备;先断开重连 |
 | 订阅通知后收不到回显 | 方案 A 确认对端 `--echo`;方案 A' 需在 nRF Connect Server 页手动发通知;旧版 nRF 需先写一帧;驱动已兼容先订阅场景 |
 | Windows `ble adv` 报 `参数错误 (0x80070057)` | **属预期**:Windows 桌面进程无 bluetooth 能力(需包标识),广播被系统拒绝;适配器/无线电/载荷均正常(可用 `zoe-cli ble diag` 复核)。改用方案 A':手机 nRF Connect 模拟 peripheral + Windows/Chrome 做 central |

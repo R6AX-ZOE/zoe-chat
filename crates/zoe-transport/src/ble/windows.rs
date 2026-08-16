@@ -343,14 +343,39 @@ impl BleDriver for WindowsDriver {
             return Err(BleError("bad mac length".to_string()));
         }
         let mac = btleplug::api::BDAddr::from(<[u8; 6]>::try_from(bytes.as_slice()).unwrap());
-        let peripheral: Peripheral = self
-            .adapter
-            .peripherals()
-            .await
-            .map_err(err)?
-            .into_iter()
-            .find(|p| p.address() == mac)
-            .ok_or_else(|| BleError("peripheral not found".to_string()))?;
+        // Windows 的 btleplug:peripheral 必须被扫描(watcher)发现过才会出现在
+        // adapter.peripherals() 里;而 scan/connect 常是不同进程 —— 这里先
+        // 启动扫描并轮询等待目标出现(最多 CONNECT_SCAN_TIMEOUT),再连接。
+        const CONNECT_SCAN_TIMEOUT: Duration = Duration::from_secs(20);
+        let mut scanning = false;
+        let deadline = std::time::Instant::now() + CONNECT_SCAN_TIMEOUT;
+        let peripheral = loop {
+            if let Some(p) = self
+                .adapter
+                .peripherals()
+                .await
+                .map_err(err)?
+                .into_iter()
+                .find(|p| p.address() == mac)
+            {
+                break p;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(BleError(format!(
+                    "peripheral not found: 扫描 {}s 未发现 {mac}(确认对端正在广播;RPA 地址会变,先重新 ble scan)",
+                    CONNECT_SCAN_TIMEOUT.as_secs()
+                )));
+            }
+            if !scanning {
+                self.adapter
+                    .start_scan(ScanFilter::default())
+                    .await
+                    .map_err(err)?;
+                scanning = true;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        };
+        let _ = self.adapter.stop_scan().await;
 
         peripheral.connect().await.map_err(err)?;
         peripheral.discover_services().await.map_err(err)?;

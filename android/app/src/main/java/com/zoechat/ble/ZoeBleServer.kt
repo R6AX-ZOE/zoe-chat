@@ -1,11 +1,11 @@
 package com.zoechat.ble
 
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattServer
 import android.bluetooth.BluetoothGattServerCallback
 import android.bluetooth.BluetoothGattService
-import android.bluetooth.BluetoothGattStatus
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Context
@@ -68,7 +68,7 @@ class ZoeBleServer(context: Context, private val listener: Listener) {
             if (characteristic.uuid != ZoeFrame.WRITE_UUID) return
             // 立即回复,避免客户端等待(WRITE 属性)
             if (responseNeeded) {
-                gattServer?.sendResponse(device, requestId, BluetoothGattStatus.SUCCESS, 0, null)
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
             val raw = value?.copyOf() ?: ByteArray(0)
             main.post {
@@ -89,7 +89,7 @@ class ZoeBleServer(context: Context, private val listener: Listener) {
         override fun onNotificationSent(device: BluetoothDevice, status: Int) {
             main.post {
                 listener.onLog(
-                    if (status == BluetoothGattStatus.SUCCESS) {
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
                         "[发] 通知已送达 ${device.address}"
                     } else {
                         "[发] 通知失败(status=$status) ${device.address}(未订阅通知?)"

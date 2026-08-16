@@ -157,9 +157,20 @@ impl BleDriver for LinuxDriver {
                         continue;
                     };
                     let name = device.name().await.ok().flatten().unwrap_or_default();
+                    // 广播/已知服务 UUID 里带 zoe 服务即标记(属性缺失时 ok() 兜底为 false)
+                    let zoe = device
+                        .uuids()
+                        .await
+                        .ok()
+                        .map(|u| u.contains(&SERVICE_UUID))
+                        .unwrap_or(false);
                     // 统一为 6 字节 MAC 表示(与 windows.rs 一致)
                     if let Ok(baddr) = BleAddr::from_mac_str(&addr.to_string()) {
-                        out.push(BlePeer { addr: baddr, name });
+                        out.push(BlePeer {
+                            addr: baddr,
+                            name,
+                            zoe,
+                        });
                     }
                 }
                 Ok(Some(_)) => {}

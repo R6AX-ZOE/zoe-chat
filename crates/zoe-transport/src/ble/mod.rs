@@ -101,6 +101,8 @@ impl std::error::Error for BleError {}
 pub struct BlePeer {
     pub addr: BleAddr,
     pub name: String,
+    /// 广播载荷中携带了 zoe 服务 UUID(扫描结果中快速识别 zoe 设备)。
+    pub zoe: bool,
 }
 
 /// 一条已建立的 GATT 连接。
@@ -560,6 +562,7 @@ impl BleDriver for MockDriver {
             out.push(BlePeer {
                 addr: BleAddr(addr.as_bytes().to_vec()),
                 name: d.name.lock().unwrap().clone(),
+                zoe: false,
             });
         }
         Ok(out)

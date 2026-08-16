@@ -329,6 +329,8 @@ impl BleDriver for WindowsDriver {
                 out.push(BlePeer {
                     addr: BleAddr(props.address.into_inner().to_vec()),
                     name: props.local_name.unwrap_or_default(),
+                    // 广播载荷(AD 0x07 服务 UUID 列表)里带 zoe 服务即标记
+                    zoe: props.services.contains(&SERVICE_UUID),
                 });
             }
         }

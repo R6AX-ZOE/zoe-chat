@@ -207,8 +207,9 @@ Android 内核未编译 BlueZ 驱动、控制器被厂商 HAL 独占。仅当设
 | 现象 | 原因与处理 |
 |---|---|
 | `termux-bluetooth-scan` 无输出/报错 | Termux:API 权限未授予;定位未开;蓝牙未开;屏幕熄灭(Android 8.1+ 熄屏停扫) |
-| 扫到设备但名字为空 | 广播未带 local name;用 MAC 匹配(`--filter 18:AA`),或 Chrome 测试页留空名称前缀按服务 UUID 过滤 |
-| 扫描不到端广播 | 对端广播未启动(nRF Connect Advertiser 要运行);两台设备距离过远;信道拥堵换位置 |
+| 扫到设备但名字为空 | 广播未带 local name;用 MAC 匹配(`--filter 18:AA`),或 Chrome 测试页留空名称前缀按服务 UUID 过滤。`zoe-cli ble scan` 输出带 `⭐ zoe 设备` 标记的就是手机 App |
+| 找不到手机的"蓝牙地址" | Android 广播用的是随机私有地址(RPA),与手机设置里的蓝牙地址不同,且重启广播后可能变化;以扫描结果为准,连接前重新扫描 |
+| 扫描不到端广播 | 对端广播未启动(nRF Connect Advertiser 要运行);两台设备距离过远;信道拥堵换位置;手机与 Windows 已配对时部分系统会屏蔽其广播(设置里删除配对) |
 | Chrome 弹窗里没有 zoe-device | 页面按服务 UUID 过滤,对端必须广播我们的 `SERVICE_UUID`(nRF Connect Advertiser 里添加;`ble adv` 已内置);或改名前缀过滤 |
 | 写特性报错 | MTU 不足(Android 通常协商 517B,帧 ≤512B);连错设备;先断开重连 |
 | 订阅通知后收不到回显 | 方案 A 确认对端 `--echo`;方案 A' 需在 nRF Connect Server 页手动发通知;旧版 nRF 需先写一帧;驱动已兼容先订阅场景 |

@@ -167,8 +167,17 @@ async fn cmd_scan<D: BleDriver>(args: &[String], driver: D) {
             let (addr_h, name_h) = ("ADDRESS", "NAME");
             println!("{addr_h:<22} {name_h}");
             for p in peers {
-                println!("{:<22} {}", p.addr.to_mac(), p.name);
+                let mark = if p.zoe {
+                    "  ⭐ zoe 设备(手机 App)"
+                } else {
+                    ""
+                };
+                println!("{:<22} {}{}", p.addr.to_mac(), p.name, mark);
             }
+            println!();
+            println!("提示:手机 zoe App 的广播地址是随机私有地址(RPA),与手机设置里的");
+            println!("蓝牙地址不同,且重启广播后可能变化 —— 认 ⭐ 标记;每次连接前");
+            println!("重新扫描,取最新地址即可。");
         }
         Err(e) => {
             eprintln!("ble scan failed: {e}");

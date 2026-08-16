@@ -14,8 +14,8 @@
 **M2(近场)✅ 驱动待真机验证**
 - `BleDriver` trait + `MeshOverlay`:BLE GATT 网状覆盖(分片/重组、去重、TTL 存储转发),mock 驱动 5 项测试通过
 - 驱动:bluer(Linux,CI 编译验证)、btleplug + windows-rs(Windows,本机编译验证)
-- 角色:Linux 全角色(广播 + GATT 服务端 + 扫描/连接);Windows 可广播(仅广告,手机可扫描到 zoe-device)、可扫描/连接,但 **GATT 服务端受 UWP 限制不可用**(GattServiceProvider 需包标识)
-- 真机联调工具:`zoe-cli ble adv|scan|connect`(Linux/Windows)、`scripts/termux/`(Android 扫描/构建)、`tools/ble-gatt-test/`(手机 Chrome Web Bluetooth GATT 测试页),流程见 [docs/termux-ble.md](docs/termux-ble.md)
+- 角色:Linux 全角色(广播 + GATT 服务端 + 扫描/连接);Windows 仅 central(扫描/连接)——广播与 GATT 服务端均需 UWP 包标识,桌面二进制不可用(0x80070057,已实测确认)
+- 真机联调工具:`zoe-cli ble adv|scan|connect|diag`(Linux 全角色 / Windows central)、`scripts/termux/`(Android 扫描/构建)、`tools/ble-gatt-test/`(Web Bluetooth GATT 测试页),流程见 [docs/termux-ble.md](docs/termux-ble.md)
 
 **M3(远程)✅**
 - libp2p 远程通道:手动拨号 + mDNS 发现 + DCUtR 打洞,noise 用身份密钥(与 QR 名片同钥)
@@ -49,9 +49,11 @@ cargo run -p zoe-daemon -- --data-dir zoe-data
 cargo build -p zoe-cli --features ble-linux
 target/debug/zoe-cli ble adv --name zoe-device --echo
 
-# Windows 节点(仅广播/扫描/连接;无 GATT 服务端 —— 手机可见但连不上)
+# Windows 节点(仅 central:扫描/连接;广播需 UWP 包标识,不可用)
 cargo build -p zoe-cli --features ble-windows
-target/debug/zoe-cli ble adv --name zoe-device
+target/debug/zoe-cli ble scan --timeout 10     # 配合手机 nRF Connect 模拟 peripheral
+
+# 手机 Chrome 打开 tools/ble-gatt-test/index.html → 连接 zoe-device → 发帧/echo 测试
 
 # 手机 Termux:安装环境 → 扫描验证广播
 bash scripts/termux/setup-termux.sh

@@ -2,13 +2,14 @@
 //! feature `ble-windows`,仅 Windows 编译。
 //!
 //! 角色能力:
-//! - 广播:BluetoothLEAdvertisementPublisher(名称 + 服务 UUID)—— 手机等
-//!   扫描方可"看见"本节点(zoe-device);
-//! - 主动连接(central):扫描 + GATT 读写/通知(btleplug);
-//! - 被连接(GATT server)不可用:Windows 桌面应用无法托管 GATT 服务端
-//!   (GattServiceProvider 仅 UWP/需包标识),故 Windows 节点只能被扫描到,
-//!   不能接受手机连接;完整 GATT 服务端角色由 Linux 节点承担(见 docs/DESIGN.md §6.2)。
-//! 真机验证需 Windows 10 1709+ 且带蓝牙适配器。
+//! - 主动连接(central):扫描 + GATT 读写/通知(btleplug)—— 真机联调主路线;
+//! - 广播:BluetoothLEAdvertisementPublisher 在**未打包的桌面进程**中不可用
+//!   (该 API 需要包标识中的 bluetooth 能力声明,Start() 抛 0x80070057
+//!   E_INVALIDARG;适配器/无线电/载荷均正常时同样失败,已用 ble diag 验证)。
+//!   若确需 Windows 广播,只能走 MSIX 打包 + 管理员信任证书路线(本项目不提供);
+//! - 被连接(GATT server)同样需 UWP(GattServiceProvider),不可用。
+//! 真机联调拓扑见 docs/termux-ble.md:手机 nRF Connect 模拟 peripheral,
+//! Windows `zoe-cli ble scan/connect` 或电脑 Chrome Web Bluetooth 做 central。
 
 #![cfg(all(feature = "ble-windows", windows))]
 
@@ -149,8 +150,12 @@ impl WindowsDriver {
             Err(e) => out.push_str(&format!("[能力] 查询失败: {e}\n")),
         }
 
-        // 4) 最小载荷广播实测(仅服务 UUID,21B)
+        // 4) 最小载荷广播实测(仅服务 UUID,21B)。
+        //    未打包桌面进程无 bluetooth 能力,预期 Start() 报 0x80070057 ——
+        //    这正是 Windows 广播不可用的根因(需 MSIX 打包,本项目不做)。
         out.push_str("[实测] 尝试最小载荷广播(仅服务 UUID)...\n");
+        out.push_str("[实测] 注:未打包进程预期失败(0x80070057,缺 bluetooth 能力);\n");
+        out.push_str("[实测]     若意外成功,说明你的系统允许桌面广播。\n");
         match Self::try_start(SERVICE_UUID, None, false) {
             Ok(p) => {
                 let mut status = "未知";
@@ -222,42 +227,20 @@ impl WindowsDriver {
         ))
     }
 
-    /// 查找蓝牙无线电;关闭时尝试开启(需系统允许,否则返回提示)。
+    /// 检查蓝牙无线电状态;关闭时提示手动开启(只检测,不修改系统设置)。
+    /// 注:Windows 桌面进程广播本就不可能(见 start_advertising 注释),
+    /// 此检查仅为给出更明确的报错信息。
     async fn ensure_radio_on() -> Result<(), String> {
-        use windows::Devices::Radios::{Radio, RadioKind, RadioState};
-        let radios = Self::wait_async(&Radio::GetRadiosAsync().map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        let count = radios.Size().map_err(|e| e.to_string())?;
-        for i in 0..count {
-            let radio = radios.GetAt(i).map_err(|e| e.to_string())?;
-            if radio.Kind().map_err(|e| e.to_string())? != RadioKind::Bluetooth {
-                continue;
+        use windows::Devices::Radios::RadioState;
+        match Self::radio_state().await {
+            Ok(Some(RadioState::On)) => Ok(()),
+            Ok(Some(RadioState::Disabled)) => {
+                Err("蓝牙无线电处于禁用状态(设备管理器),无法广播".to_string())
             }
-            match radio.State().map_err(|e| e.to_string())? {
-                RadioState::On => return Ok(()),
-                RadioState::Disabled => {
-                    return Err("蓝牙无线电处于禁用状态(设备管理器),无法自动开启".to_string())
-                }
-                _ => {}
-            }
-            // 请求访问权并尝试开启
-            let _ = Self::wait_async(&Radio::RequestAccessAsync().map_err(|e| e.to_string())?);
-            match Self::wait_async(&radio.SetStateAsync(RadioState::On).map_err(|e| e.to_string())?)
-            {
-                Ok(status) if status == windows::Devices::Radios::RadioAccessStatus::Allowed => {
-                    return Ok(())
-                }
-                Ok(status) => {
-                    return Err(format!(
-                        "蓝牙已关闭且自动开启被系统拒绝({status:?}),请手动打开:设置 → 蓝牙"
-                    ))
-                }
-                Err(e) => {
-                    return Err(format!("蓝牙已关闭且自动开启失败: {e},请手动打开:设置 → 蓝牙"))
-                }
-            }
+            Ok(Some(_)) => Err("蓝牙已关闭,请手动打开:设置 → 蓝牙和与其他设备".to_string()),
+            Ok(None) => Ok(()),
+            Err(e) => Err(format!("查询蓝牙无线电状态失败: {e}")),
         }
-        Ok(())
     }
 }
 
@@ -295,7 +278,7 @@ impl BleDriver for WindowsDriver {
 
     async fn start_advertising(&self, name: &str) -> Result<(), BleError> {
         self.stop_advertising().await?;
-        // 蓝牙无线电关闭时 Start() 会直接抛 E_INVALIDARG(0x80070057),先确保开启
+        // 无线电关闭时给出明确提示(只检测,不修改系统设置)
         match Self::ensure_radio_on().await {
             Ok(()) => {}
             Err(e) => eprintln!("ble: 提示: {e}"),

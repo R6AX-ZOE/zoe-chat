@@ -8,8 +8,9 @@
 //!
 //! 平台差异:
 //!   - Linux:完整角色(广播 + GATT 服务端 + 扫描 + 连接),--echo 可用;
-//!   - Windows:可广播(仅广告,手机能扫描到)、可扫描、可连接;
-//!     GATT 服务端受 UWP 限制不可用,`ble adv` 以"仅广播"模式运行。
+//!   - Windows:仅 central(扫描 + 连接);广播与 GATT 服务端均需 UWP/包标识
+//!     (Start 报 0x80070057),桌面二进制不可用 —— 真机联调用手机
+//!     nRF Connect 模拟 peripheral + 本机做 central(见 docs/termux-ble.md)。
 //!
 //! 帧格式见 docs/envelope.md §2.1:
 //!   [magic 0x5A | msg_id 8 | ttl 1 | chunk_idx 1 | total 2 | data ≤499]
@@ -150,8 +151,9 @@ async fn cmd_adv<D: BleDriver>(args: &[String], driver: D) {
         Err(e) => {
             if cfg!(windows) {
                 println!("GATT 服务端不可用(Windows 桌面应用限制,GattServiceProvider 需 UWP): {e}");
-                println!("仅广播模式:手机可扫描到 {name}(termux 扫不到请改用服务 UUID 过滤),");
-                println!("但无法建立 GATT 连接;完整 echo 测试需 Linux 节点。Ctrl-C 停止。");
+                println!("Windows 广播同样不可用(缺 bluetooth 能力,Start 报 0x80070057)。");
+                println!("真机联调请用:手机 nRF Connect 模拟 peripheral → 本机 ble scan/connect 做 central");
+                println!("(详见 docs/termux-ble.md)。Ctrl-C 停止。");
                 loop {
                     tokio::time::sleep(Duration::from_secs(3600)).await;
                 }

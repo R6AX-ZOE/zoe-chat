@@ -12,9 +12,9 @@ import android.os.ParcelUuid
 
 /**
  * BLE 广播器:广播 zoe 服务 UUID(connectable)。
- * 注:Android 的 AdvertiseData 没有自定义 LocalName 字段,
- * setIncludeDeviceName 使用手机系统蓝牙名称(设置 → 蓝牙 → 设备名 可改);
- * 对端按服务 UUID 过滤即可(与 tools/ble-gatt-test 一致)。
+ * 注意:不带设备名 —— 128 位服务 UUID 已占 18 字节,系统蓝牙名长度不可控,
+ * 再加名字很容易触发 ADVERTISE_FAILED_DATA_TOO_LARGE(31 字节 legacy 载荷上限)。
+ * 扫描方(zoe-cli / ble-scan.sh / ble-gatt-test)都按服务 UUID 过滤,设备名非必需。
  */
 class ZoeAdvertiser(context: Context, private val onLog: (String) -> Unit) {
 
@@ -36,18 +36,20 @@ class ZoeAdvertiser(context: Context, private val onLog: (String) -> Unit) {
             .build()
         val data = AdvertiseData.Builder()
             .addServiceUuid(ParcelUuid(ZoeFrame.SERVICE_UUID))
-            .setIncludeDeviceName(true)
             .build()
         callback = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
                 main.post {
-                    onLog("[广播] 已开始:名称=${bluetoothManager.adapter?.name ?: "?"} 服务=${ZoeFrame.SERVICE_UUID}")
+                    onLog("[广播] 已开始:服务=${ZoeFrame.SERVICE_UUID}")
                 }
             }
 
             override fun onStartFailure(errorCode: Int) {
                 main.post {
-                    onLog("[广播] 启动失败 errorCode=$errorCode(1=数据过大 2=太频繁 3=数据非法 4=不支持 5=内部错误)")
+                    onLog(
+                        "[广播] 启动失败 errorCode=$errorCode" +
+                            "(1=数据过大 2=广告实例过多 3=已在广播 4=内部错误 5=特性不支持)"
+                    )
                 }
             }
         }

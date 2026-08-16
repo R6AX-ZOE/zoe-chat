@@ -124,7 +124,9 @@ bash scripts/termux/ble-scan.sh --wait-for zoe-device --timeout 60
      `adb install -r app/build/outputs/apk/debug/app-debug.apk`
      (也可从 GitHub Actions 的 Android Build 工作流下载 APK 产物);
 2. 打开 App → 授权"附近的设备"(Android 12+)/定位(Android 12 以下)→ 点**启动**;
-3. App 开始广播(名称 = 手机系统蓝牙名)并托管 GATT 服务;echo 开关默认开启。
+3. App 开始广播(只带服务 UUID,不带设备名 —— 128 位 UUID + 系统蓝牙名
+   易超 31 字节 legacy 载荷上限导致 `ADVERTISE_FAILED_DATA_TOO_LARGE`)
+   并托管 GATT 服务;echo 开关默认开启。
 
 > 临时替代(无 APK 时):nRF Connect App → **Advertiser** 页新建广播(服务 UUID
 > `7a5e0001-2e4c-4a31-9b6c-3c2a0e5f6a01`,名称随意)→ **Server** 页新建服务

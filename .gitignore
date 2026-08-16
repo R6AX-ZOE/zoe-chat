@@ -5,3 +5,13 @@
 /webui/node_modules
 /.smoke
 /dist
+
+# Android
+/android/.gradle
+/android/build
+/android/app/build
+/android/local.properties
+/android/.idea
+/android/captures
+*.apk
+*.aab

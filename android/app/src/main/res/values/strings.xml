@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">zoe BLE 服务端</string>
+    <string name="btn_start">启动</string>
+    <string name="btn_stop">停止</string>
+    <string name="btn_clear">清空日志</string>
+    <string name="label_echo">echo 回显模式</string>
+    <string name="status_stopped">已停止</string>
+    <string name="hint">广播服务 7a5e0001-2e4c-4a31-9b6c-3c2a0e5f6a01\n电脑端:zoe-cli ble scan / ble connect &lt;MAC&gt; --send &lt;HEX&gt;\n或 Chrome 打开 tools/ble-gatt-test/index.html</string>
+</resources>

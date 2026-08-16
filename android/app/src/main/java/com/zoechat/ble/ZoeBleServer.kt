@@ -63,6 +63,7 @@ class ZoeBleServer(context: Context, private val listener: Listener) {
             characteristic: BluetoothGattCharacteristic,
             preparedWrite: Boolean,
             responseNeeded: Boolean,
+            offset: Int,
             value: ByteArray?
         ) {
             if (characteristic.uuid != ZoeFrame.WRITE_UUID) return

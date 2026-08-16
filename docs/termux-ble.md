@@ -165,6 +165,7 @@ Android 内核未编译 BlueZ 驱动、控制器被厂商 HAL 独占。仅当设
 | Chrome 弹窗里没有 zoe-device | 页面按服务 UUID 过滤,对端必须用我们的 `SERVICE_UUID` 广播(`ble adv` 已内置);或改名前缀过滤;Windows 广播为非可连接广告,能看到但连接会失败 |
 | 写特性报错 | MTU 不足(Android 通常协商 517B,帧 ≤512B);连错设备;先断开重连 |
 | 订阅通知后收不到回显 | 确认对端 `--echo`;旧版 nRF 需先写一帧;驱动已兼容先订阅场景 |
+| Windows 广播报 `参数错误 (0x80070057)` | legacy 广播载荷上限 31B,名称>8 字符+128 位 UUID 会超限;新版驱动自动回退(扩展广播→去名称),若仍失败请改用 `--name` ≤8 字符(如 `zoe-dev`) |
 | Windows 广播后手机能扫到但连不上 | 属预期:Windows 桌面应用无 GATT 服务端(GattServiceProvider 需 UWP);GATT 链路测试需 Linux 节点 |
 | `pkg install bluez` 失败/不可用 | 属预期,Android 无 BlueZ;走 termux-api + Web Bluetooth 路线 |
 | 手机端 `cargo build` 慢 | 首次编译依赖多,耐心等待;`--release` 更慢但产物更小 |

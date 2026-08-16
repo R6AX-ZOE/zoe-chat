@@ -53,6 +53,10 @@ impl WindowsDriver {
             _publisher: Mutex::new(None),
         })
     }
+
+    fn set_publisher(&self, p: BluetoothLEAdvertisementPublisher) {
+        *self._publisher.lock().unwrap() = Some(p);
+    }
 }
 
 /// Windows 连接:远端 Peripheral + 写特性 + 通知流(由后台任务汇入通道)。
@@ -89,19 +93,56 @@ impl BleDriver for WindowsDriver {
 
     async fn start_advertising(&self, name: &str) -> Result<(), BleError> {
         self.stop_advertising().await?;
-        let publisher = BluetoothLEAdvertisementPublisher::new().map_err(err)?;
-        let adv = publisher.Advertisement().map_err(err)?;
-        // 名称 + 服务 UUID 进入广播包;注意部分 Windows 版本不发送 LocalName,
-        // 手机侧过滤可改用服务 UUID(Web Bluetooth 测试页留空名称前缀即可)。
-        let hname = windows::core::HSTRING::from(name);
-        adv.SetLocalName(&hname).map_err(err)?;
+        let publisher = BluetoothLEAdvertisementPublisher::new()
+            .map_err(|e| BleError(format!("create publisher: {e}")))?;
+        let adv = publisher
+            .Advertisement()
+            .map_err(|e| BleError(format!("get advertisement: {e}")))?;
         adv.ServiceUuids()
-            .map_err(err)?
+            .map_err(|e| BleError(format!("service uuids: {e}")))?
             .Append(windows::core::GUID::from_u128(SERVICE_UUID.as_u128()))
-            .map_err(err)?;
-        publisher.Start().map_err(err)?;
-        *self._publisher.lock().unwrap() = Some(publisher);
-        Ok(())
+            .map_err(|e| BleError(format!("append service uuid: {e}")))?;
+
+        // legacy 广播载荷上限 31B:Flags(3B)+ 128 位服务 UUID(18B)+ 名称(2+N)B。
+        // 名称 > 8 字符即超限,Start() 抛 E_INVALIDARG(0x80070057)。
+        // 策略:1) legacy+名称 → 2) 扩展广播+名称(上限 1650B,需控制器支持)
+        //      → 3) legacy 去名称(仅 UUID,21B,必定可广播)。
+        let name_set = adv
+            .SetLocalName(&windows::core::HSTRING::from(name))
+            .is_ok();
+        let mut prior = String::new();
+
+        if name_set {
+            match publisher.Start() {
+                Ok(()) => {
+                    self.set_publisher(publisher);
+                    return Ok(());
+                }
+                Err(e) => prior = format!("legacy with name: {e}; "),
+            }
+            // 尝试扩展广播(控制器不支持时 Start 失败,继续回退)
+            let _ = publisher.SetUseExtendedAdvertisement(true);
+            match publisher.Start() {
+                Ok(()) => {
+                    self.set_publisher(publisher);
+                    return Ok(());
+                }
+                Err(e) => prior = format!("{prior}extended with name: {e}; "),
+            }
+            let _ = publisher.SetUseExtendedAdvertisement(false);
+        }
+
+        // 最终回退:不广播名称(部分 Windows 版本本就不发送 LocalName)
+        let _ = adv.SetLocalName(&windows::core::HSTRING::new());
+        match publisher.Start() {
+            Ok(()) => {
+                self.set_publisher(publisher);
+                Ok(())
+            }
+            Err(e) => Err(BleError(format!(
+                "publisher start failed: {e} (prior attempts: {prior}fallback without name)"
+            ))),
+        }
     }
 
     async fn stop_advertising(&self) -> Result<(), BleError> {

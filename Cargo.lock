@@ -5142,5 +5142,6 @@ dependencies = [
  "tokio",
  "uuid",
  "windows",
+ "windows-future",
  "zoe-core",
 ]

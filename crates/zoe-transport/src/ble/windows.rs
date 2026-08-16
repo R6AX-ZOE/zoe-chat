@@ -57,6 +57,91 @@ impl WindowsDriver {
     fn set_publisher(&self, p: BluetoothLEAdvertisementPublisher) {
         *self._publisher.lock().unwrap() = Some(p);
     }
+
+    /// 尝试以给定参数启动一个全新 publisher;返回已启动的 publisher。
+    fn try_start(
+        service: uuid::Uuid,
+        name: Option<&str>,
+        extended: bool,
+    ) -> Result<BluetoothLEAdvertisementPublisher, String> {
+        let publisher = BluetoothLEAdvertisementPublisher::new()
+            .map_err(|e| format!("create publisher: {e}"))?;
+        if extended {
+            publisher
+                .SetUseExtendedAdvertisement(true)
+                .map_err(|e| format!("set extended: {e}"))?;
+        }
+        let adv = publisher
+            .Advertisement()
+            .map_err(|e| format!("get advertisement: {e}"))?;
+        adv.ServiceUuids()
+            .map_err(|e| format!("service uuids: {e}"))?
+            .Append(windows::core::GUID::from_u128(service.as_u128()))
+            .map_err(|e| format!("append service uuid: {e}"))?;
+        if let Some(n) = name {
+            adv.SetLocalName(&windows::core::HSTRING::from(n))
+                .map_err(|e| format!("set local name: {e}"))?;
+        }
+        publisher.Start().map_err(|e| format!("start: {e}"))?;
+        Ok(publisher)
+    }
+
+    /// 阻塞等待 WinRT 异步操作完成。windows-future 的 IAsyncOperation Future
+    /// 非 Send(BleDriver 要求 Send),且其 Async trait 为私有不可导入,
+    /// CLI 场景下轮询 IAsyncInfo::Status 等待即可。
+    fn wait_async<T: windows::core::RuntimeType>(
+        op: &windows_future::IAsyncOperation<T>,
+    ) -> Result<T, windows::core::Error> {
+        use windows::core::Interface;
+        let info: windows_future::IAsyncInfo = op.cast()?;
+        loop {
+            match info.Status()? {
+                windows_future::AsyncStatus::Completed => return op.GetResults(),
+                windows_future::AsyncStatus::Error => {
+                    return Err(windows::core::Error::from(info.ErrorCode()?))
+                }
+                _ => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+    }
+
+    /// 查找蓝牙无线电;关闭时尝试开启(需系统允许,否则返回提示)。
+    async fn ensure_radio_on() -> Result<(), String> {
+        use windows::Devices::Radios::{Radio, RadioKind, RadioState};
+        let radios = Self::wait_async(&Radio::GetRadiosAsync().map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let count = radios.Size().map_err(|e| e.to_string())?;
+        for i in 0..count {
+            let radio = radios.GetAt(i).map_err(|e| e.to_string())?;
+            if radio.Kind().map_err(|e| e.to_string())? != RadioKind::Bluetooth {
+                continue;
+            }
+            match radio.State().map_err(|e| e.to_string())? {
+                RadioState::On => return Ok(()),
+                RadioState::Disabled => {
+                    return Err("蓝牙无线电处于禁用状态(设备管理器),无法自动开启".to_string())
+                }
+                _ => {}
+            }
+            // 请求访问权并尝试开启
+            let _ = Self::wait_async(&Radio::RequestAccessAsync().map_err(|e| e.to_string())?);
+            match Self::wait_async(&radio.SetStateAsync(RadioState::On).map_err(|e| e.to_string())?)
+            {
+                Ok(status) if status == windows::Devices::Radios::RadioAccessStatus::Allowed => {
+                    return Ok(())
+                }
+                Ok(status) => {
+                    return Err(format!(
+                        "蓝牙已关闭且自动开启被系统拒绝({status:?}),请手动打开:设置 → 蓝牙"
+                    ))
+                }
+                Err(e) => {
+                    return Err(format!("蓝牙已关闭且自动开启失败: {e},请手动打开:设置 → 蓝牙"))
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Windows 连接:远端 Peripheral + 写特性 + 通知流(由后台任务汇入通道)。
@@ -93,54 +178,42 @@ impl BleDriver for WindowsDriver {
 
     async fn start_advertising(&self, name: &str) -> Result<(), BleError> {
         self.stop_advertising().await?;
-        let publisher = BluetoothLEAdvertisementPublisher::new()
-            .map_err(|e| BleError(format!("create publisher: {e}")))?;
-        let adv = publisher
-            .Advertisement()
-            .map_err(|e| BleError(format!("get advertisement: {e}")))?;
-        adv.ServiceUuids()
-            .map_err(|e| BleError(format!("service uuids: {e}")))?
-            .Append(windows::core::GUID::from_u128(SERVICE_UUID.as_u128()))
-            .map_err(|e| BleError(format!("append service uuid: {e}")))?;
+        // 蓝牙无线电关闭时 Start() 会直接抛 E_INVALIDARG(0x80070057),先确保开启
+        match Self::ensure_radio_on().await {
+            Ok(()) => {}
+            Err(e) => eprintln!("ble: 提示: {e}"),
+        }
 
-        // legacy 广播载荷上限 31B:Flags(3B)+ 128 位服务 UUID(18B)+ 名称(2+N)B。
-        // 名称 > 8 字符即超限,Start() 抛 E_INVALIDARG(0x80070057)。
-        // 策略:1) legacy+名称 → 2) 扩展广播+名称(上限 1650B,需控制器支持)
-        //      → 3) legacy 去名称(仅 UUID,21B,必定可广播)。
-        let name_set = adv
-            .SetLocalName(&windows::core::HSTRING::from(name))
-            .is_ok();
+        // legacy 广播载荷上限 31B:Flags(3B)+ 128 位服务 UUID(18B)+ 名称(2+N)B,
+        // 名称 > 8 字符即超限。每个尝试都用全新 publisher(避免状态残留),失败逐级回退:
+        //   1) legacy + 名称    2) 扩展广播 + 名称(上限 1650B,需控制器支持)
+        //   3) legacy 无名称(仅 UUID,21B,必定合法;部分 Windows 本就不发 LocalName)
         let mut prior = String::new();
 
-        if name_set {
-            match publisher.Start() {
-                Ok(()) => {
-                    self.set_publisher(publisher);
+        if !name.is_empty() {
+            match Self::try_start(SERVICE_UUID, Some(name), false) {
+                Ok(p) => {
+                    self.set_publisher(p);
                     return Ok(());
                 }
                 Err(e) => prior = format!("legacy with name: {e}; "),
             }
-            // 尝试扩展广播(控制器不支持时 Start 失败,继续回退)
-            let _ = publisher.SetUseExtendedAdvertisement(true);
-            match publisher.Start() {
-                Ok(()) => {
-                    self.set_publisher(publisher);
+            match Self::try_start(SERVICE_UUID, Some(name), true) {
+                Ok(p) => {
+                    self.set_publisher(p);
                     return Ok(());
                 }
                 Err(e) => prior = format!("{prior}extended with name: {e}; "),
             }
-            let _ = publisher.SetUseExtendedAdvertisement(false);
         }
 
-        // 最终回退:不广播名称(部分 Windows 版本本就不发送 LocalName)
-        let _ = adv.SetLocalName(&windows::core::HSTRING::new());
-        match publisher.Start() {
-            Ok(()) => {
-                self.set_publisher(publisher);
+        match Self::try_start(SERVICE_UUID, None, false) {
+            Ok(p) => {
+                self.set_publisher(p);
                 Ok(())
             }
             Err(e) => Err(BleError(format!(
-                "publisher start failed: {e} (prior attempts: {prior}fallback without name)"
+                "publisher start failed: {e} (prior: {prior}fallback without name)"
             ))),
         }
     }

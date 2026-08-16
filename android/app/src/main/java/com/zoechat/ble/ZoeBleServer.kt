@@ -109,6 +109,22 @@ class ZoeBleServer(context: Context, private val listener: Listener) {
                 )
             }
         }
+
+        override fun onDescriptorWriteRequest(
+            device: BluetoothDevice,
+            requestId: Int,
+            descriptor: BluetoothGattDescriptor,
+            preparedWrite: Boolean,
+            responseNeeded: Boolean,
+            offset: Int,
+            value: ByteArray?
+        ) {
+            // CCCD(0x2902)订阅写入:栈通常自动处理,但部分机型会回调到 App;
+            // 不显式应答会让客户端等到超时(表现为主机侧 Unreachable)。这里统一应答。
+            if (responseNeeded) {
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
+            }
+        }
     }
 
     fun setEcho(enabled: Boolean) {

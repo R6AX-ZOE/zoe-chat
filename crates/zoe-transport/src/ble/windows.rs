@@ -394,7 +394,33 @@ impl BleDriver for WindowsDriver {
         let notify_char =
             notify_char.ok_or_else(|| BleError("notify characteristic missing".to_string()))?;
 
-        peripheral.subscribe(&notify_char).await.map_err(err)?;
+        // 订阅通知(写 CCCD):Windows BLE 在连接刚建立后偶发 Unreachable(对端
+        // 无响应/缓存旧会话),重试一次;失败时给出可操作提示。
+        let mut sub_err = None;
+        for _ in 0..2 {
+            match peripheral.subscribe(&notify_char).await {
+                Ok(()) => {
+                    sub_err = None;
+                    break;
+                }
+                Err(e) => {
+                    sub_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(800)).await;
+                }
+            }
+        }
+        if let Some(e) = sub_err {
+            let msg = e.to_string();
+            let hint = if msg.contains("GattCommunicationStatus(1)") || msg.contains("Unreachable")
+            {
+                " —— 订阅失败:链路不可达(对端无响应/连接掉线)。请依次尝试:① Windows 设置→蓝牙和其他设备→删除该手机 ② 手机 App 保持前台、屏幕常亮 ③ 重启手机蓝牙 ④ 重新 ble scan 取最新地址后重试"
+            } else if msg.contains("GattCommunicationStatus(3)") || msg.contains("AccessDenied") {
+                " —— 订阅失败:访问被拒(检查手机端权限;确认没有其他客户端占用)"
+            } else {
+                ""
+            };
+            return Err(BleError(format!("{msg}{hint}")));
+        }
 
         // 通知流 → mpsc(按特性 UUID 过滤)
         let (tx, rx) = mpsc::channel(128);

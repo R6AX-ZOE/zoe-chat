@@ -2,6 +2,12 @@
 resolver = "2"
 members = ["crates/zoe-core", "crates/zoe-transport", "crates/zoe-cli", "crates/zoe-daemon"]
 
+# 本地补丁:btleplug Windows 后端默认不保持 GATT 连接(MaintainConnection=false),
+# 操作间隙被系统断开(对端"连接→立即断开",后续调用报对象已关闭/Unreachable)。
+# 见 vendor/btleplug/src/winrtble/ble/device.rs 的 patch 注释。
+[patch.crates-io]
+btleplug = { path = "vendor/btleplug" }
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"

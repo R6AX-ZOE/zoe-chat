@@ -20,7 +20,8 @@ futures-util = "0.3"
 libp2p = { version = "0.56", features = ["tcp", "tokio", "mdns", "dcutr", "noise", "yamux", "identify", "macros", "request-response", "cbor", "ed25519", "dns"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-bluer = { version = "0.17", optional = true }
+# bluetoothd feature:gatt/Adapter/Session 等均在其后门控,必须启用
+bluer = { version = "0.17", features = ["bluetoothd"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 btleplug = { version = "0.12", optional = true }

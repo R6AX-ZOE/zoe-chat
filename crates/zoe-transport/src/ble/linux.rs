@@ -6,6 +6,7 @@
 //! 注:真机验证需 Linux + 蓝牙适配器(CI 无硬件,仅编译验证)。
 
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,7 +16,7 @@ use bluer::gatt::local::{
 };
 use bluer::{Adapter, Address, Advertisement, AdvertisementHandle, Session};
 use futures_util::{FutureExt, StreamExt};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 
 use crate::ble::{
     BleAddr, BleConn, BleDriver, BleError, BlePeer, NOTIFY_CHAR_UUID, SERVICE_UUID, WRITE_CHAR_UUID,

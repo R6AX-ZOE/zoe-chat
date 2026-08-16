@@ -13,9 +13,8 @@ if [ ! -x "$PREFIX/bin/pkg" ]; then
   exit 1
 fi
 
-echo "== 1/4 pkg update/upgrade =="
+echo "== 1/4 pkg update(仅刷新索引,不做 upgrade)=="
 pkg update -y
-pkg upgrade -y
 
 echo "== 2/4 安装构建依赖 =="
 pkg install -y \

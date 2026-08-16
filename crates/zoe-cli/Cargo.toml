@@ -5,8 +5,9 @@ edition.workspace = true
 description = "zoe-chat debug CLI (M0)"
 
 [features]
-# Linux BLE 真机联调子命令(ble adv/scan/connect),见 docs/termux-ble.md
+# BLE 真机联调子命令(ble adv/scan/connect),见 docs/termux-ble.md
 ble-linux = ["zoe-transport/ble-linux"]
+ble-windows = ["zoe-transport/ble-windows"]
 
 [dependencies]
 zoe-core = { path = "../zoe-core" }

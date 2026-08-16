@@ -100,6 +100,7 @@
   写 <code>7a5e0002-2e4c-4a31-9b6c-3c2a0e5f6a01</code> · 通知 <code>7a5e0003-2e4c-4a31-9b6c-3c2a0e5f6a01</code><br>
   帧格式 <code>[5A | msg_id 8B | ttl 1B | chunk_idx 1B | total 2B | data ≤499B]</code><br>
   前提:Android Chrome(需开启蓝牙与"附近设备"权限);Windows/macOS Chrome 亦可。<br>
+  注意:Windows 电脑广播(zoe-cli ble adv)的设备只能被扫描到,无法连接(Windows 无 GATT 服务端);GATT 收发测试请连接 Linux 节点。<br>
   常见问题:扫描不到 → 确认对端正在广播、权限已授、屏幕亮起;写入报错 → 检查 MTU 与帧长 ≤ 512B。
 </section>
 

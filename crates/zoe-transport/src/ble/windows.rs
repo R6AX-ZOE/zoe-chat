@@ -1,9 +1,13 @@
-//! Windows BLE 驱动:btleplug 0.12(central,WinRT)+ windows-rs 广告发布器。
+//! Windows BLE 驱动:btleplug 0.12(central)+ windows-rs 广告发布器。
 //! feature `ble-windows`,仅 Windows 编译。
 //!
-//! 已知限制(见 docs/DESIGN.md §6.2):Windows 的 GATT server 角色
-//! (被连接方)暂未实现 —— Windows 节点主动连接 Linux/其他外设;
-//! Windows↔Windows 近场互通需等 GATT server 角色(M2.5)。
+//! 角色能力:
+//! - 广播:BluetoothLEAdvertisementPublisher(名称 + 服务 UUID)—— 手机等
+//!   扫描方可"看见"本节点(zoe-device);
+//! - 主动连接(central):扫描 + GATT 读写/通知(btleplug);
+//! - 被连接(GATT server)不可用:Windows 桌面应用无法托管 GATT 服务端
+//!   (GattServiceProvider 仅 UWP/需包标识),故 Windows 节点只能被扫描到,
+//!   不能接受手机连接;完整 GATT 服务端角色由 Linux 节点承担(见 docs/DESIGN.md §6.2)。
 //! 真机验证需 Windows 10 1709+ 且带蓝牙适配器。
 
 #![cfg(all(feature = "ble-windows", windows))]
@@ -20,11 +24,10 @@ use futures_util::StreamExt;
 use tokio::sync::mpsc;
 use windows::Devices::Bluetooth::Advertisement::BluetoothLEAdvertisementPublisher;
 
-use crate::ble::{BleAddr, BleConn, BleDriver, BleError, BlePeer};
-
-pub const SERVICE_UUID: uuid::Uuid = uuid::Uuid::from_u128(0x7a5e_0001_2e4c_4a31_9b6c_3c2a_0e5f_6a01);
-pub const WRITE_CHAR_UUID: uuid::Uuid = uuid::Uuid::from_u128(0x7a5e_0002_2e4c_4a31_9b6c_3c2a_0e5f_6a01);
-pub const NOTIFY_CHAR_UUID: uuid::Uuid = uuid::Uuid::from_u128(0x7a5e_0003_2e4c_4a31_9b6c_3c2a_0e5f_6a01);
+use crate::ble::{
+    BleAddr, BleConn, BleDriver, BleError, BlePeer, NOTIFY_CHAR_UUID, SERVICE_UUID,
+    WRITE_CHAR_UUID,
+};
 
 fn err(e: impl std::fmt::Display) -> BleError {
     BleError(e.to_string())
@@ -84,17 +87,21 @@ impl BleDriver for WindowsDriver {
         "btleplug-win"
     }
 
-    async fn start_advertising(&self, _name: &str) -> Result<(), BleError> {
-        // 当前 windows-rs SDK 绑定中 BluetoothLEAdvertisementPublisher 的
-        // Advertisement 属性为只读(构造后不可配置 payload),广告角色暂不可用。
-        // 设计取舍(见 docs/DESIGN.md §6.2):Windows 节点以 central 身份
-        // 主动连接 Linux/其他外设;Windows↔Windows 近场需等 GATT server
-        // 角色与可配置广告(M2.5)。
-        Err(BleError(
-            "windows advertising not available in this SDK binding; \
-             use a Linux node as BLE peripheral (see docs/DESIGN.md §6.2)"
-                .to_string(),
-        ))
+    async fn start_advertising(&self, name: &str) -> Result<(), BleError> {
+        self.stop_advertising().await?;
+        let publisher = BluetoothLEAdvertisementPublisher::new().map_err(err)?;
+        let adv = publisher.Advertisement().map_err(err)?;
+        // 名称 + 服务 UUID 进入广播包;注意部分 Windows 版本不发送 LocalName,
+        // 手机侧过滤可改用服务 UUID(Web Bluetooth 测试页留空名称前缀即可)。
+        let hname = windows::core::HSTRING::from(name);
+        adv.SetLocalName(&hname).map_err(err)?;
+        adv.ServiceUuids()
+            .map_err(err)?
+            .Append(windows::core::GUID::from_u128(SERVICE_UUID.as_u128()))
+            .map_err(err)?;
+        publisher.Start().map_err(err)?;
+        *self._publisher.lock().unwrap() = Some(publisher);
+        Ok(())
     }
 
     async fn stop_advertising(&self) -> Result<(), BleError> {
@@ -174,10 +181,13 @@ impl BleDriver for WindowsDriver {
     }
 
     async fn listen(&self) -> Result<mpsc::Receiver<Self::Conn>, BleError> {
-        // Windows GATT server 角色(GattServiceProvider)尚未实现:
-        // Windows 节点以 central 身份主动连接(M2.5 补服务端角色)。
+        // Windows 桌面应用无法托管 GATT 服务端(GattServiceProvider 仅 UWP/
+        // 需包标识),此角色由 Linux 节点承担;Windows 节点用 adv/scan/connect。
         Err(BleError(
-            "windows gatt server role not implemented yet".to_string(),
+            "windows gatt server role requires UWP (GattServiceProvider), \
+             not available in desktop binary; Windows 节点可广播/扫描/连接, \
+             不能接受 GATT 连接"
+                .to_string(),
         ))
     }
 }

@@ -69,5 +69,9 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo check -p zoe-cli --features ble-linux
 
+      - name: Check Windows BLE CLI (windows only)
+        if: runner.os == 'Windows'
+        run: cargo check -p zoe-cli --features ble-windows
+
       - name: Build release
         run: cargo build --release --workspace

@@ -18,13 +18,10 @@ use bluer::gatt::local::{
 use bluer::{Adapter, Address, Advertisement, AdvertisementHandle, Session};
 use futures_util::{FutureExt, StreamExt};
 use tokio::sync::{broadcast, mpsc};
-use uuid::Uuid;
 
-use crate::ble::{BleAddr, BleConn, BleDriver, BleError, BlePeer};
-
-pub const SERVICE_UUID: Uuid = Uuid::from_u128(0x7a5e_0001_2e4c_4a31_9b6c_3c2a_0e5f_6a01);
-pub const WRITE_CHAR_UUID: Uuid = Uuid::from_u128(0x7a5e_0002_2e4c_4a31_9b6c_3c2a_0e5f_6a01);
-pub const NOTIFY_CHAR_UUID: Uuid = Uuid::from_u128(0x7a5e_0003_2e4c_4a31_9b6c_3c2a_0e5f_6a01);
+use crate::ble::{
+    BleAddr, BleConn, BleDriver, BleError, BlePeer, NOTIFY_CHAR_UUID, SERVICE_UUID, WRITE_CHAR_UUID,
+};
 
 fn err(e: impl std::fmt::Display) -> BleError {
     BleError(e.to_string())
@@ -142,10 +139,10 @@ impl BleDriver for LinuxDriver {
                 Ok(Some(bluer::AdapterEvent::DeviceAdded(addr))) => {
                     let Ok(device) = self.adapter.device(addr) else { continue };
                     let name = device.name().await.unwrap_or_default();
-                    out.push(BlePeer {
-                        addr: BleAddr(addr.to_string().into_bytes()),
-                        name,
-                    });
+                    // 统一为 6 字节 MAC 表示(与 windows.rs 一致)
+                    if let Ok(baddr) = BleAddr::from_mac_str(&addr.to_string()) {
+                        out.push(BlePeer { addr: baddr, name });
+                    }
                 }
                 Ok(Some(_)) => {}
                 Ok(None) | Err(_) => break,
@@ -155,8 +152,7 @@ impl BleDriver for LinuxDriver {
     }
 
     async fn connect(&self, addr: &BleAddr) -> Result<Self::Conn, BleError> {
-        let mac = String::from_utf8(addr.0.clone()).map_err(|_| BleError("bad addr".to_string()))?;
-        let address: Address = mac.parse().map_err(err)?;
+        let address: Address = addr.to_mac().parse().map_err(err)?;
         let device = self.adapter.device(address).map_err(err)?;
         device.connect().await.map_err(err)?;
         // 发现我们的服务与特性
@@ -179,7 +175,7 @@ impl BleDriver for LinuxDriver {
         let notify_char = notify_char.ok_or_else(|| BleError("notify characteristic not found".to_string()))?;
         let notify = Box::pin(notify_char.notify().await.map_err(err)?);
         Ok(LinuxConn::Client(LinuxClientConn {
-            addr: BleAddr(mac.into_bytes()),
+            addr: addr.clone(),
             write_char,
             notify,
         }))
@@ -218,10 +214,11 @@ impl BleDriver for LinuxDriver {
                         let orphan = Arc::clone(&orphan_for_write);
                         let incoming = incoming_for_write.clone();
                         async move {
-                            let addr = req.device_address.to_string();
+                            let key = req.device_address.to_string();
+                            let addr = BleAddr::from_mac_str(&key).unwrap_or_else(|_| BleAddr(key.as_bytes().to_vec()));
                             let (tx, rx_slot, notifier) = {
                                 let mut map = state.lock().unwrap();
-                                map.entry(addr.clone())
+                                map.entry(key.clone())
                                     .or_insert_with(|| {
                                         let (tx, rx) = mpsc::channel(128);
                                         // 先订阅后写入:把订阅阶段暂存的孤儿 notifier 移入
@@ -238,7 +235,7 @@ impl BleDriver for LinuxDriver {
                             let mut slot = rx_slot.lock().unwrap();
                             if let Some(rx) = slot.take() {
                                 let _ = incoming.try_send(LinuxConn::Server(LinuxServerConn {
-                                    addr: BleAddr(addr.into_bytes()),
+                                    addr,
                                     writes: rx,
                                     notifier,
                                 }));

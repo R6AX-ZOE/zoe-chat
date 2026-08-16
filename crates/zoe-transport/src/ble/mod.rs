@@ -33,6 +33,17 @@ pub const DEDUP_TTL: Duration = Duration::from_secs(24 * 3600);
 pub const SCAN_INTERVAL: Duration = Duration::from_secs(5);
 pub const REASSEMBLY_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// zoe GATT 服务与特性 UUID(规范串见 docs/termux-ble.md §5):
+/// 服务 7a5e0001-2e4c-4a31-9b6c-3c2a0e5f6a01
+/// 写   7a5e0002-2e4c-4a31-9b6c-3c2a0e5f6a01(客户端→服务端)
+/// 通知 7a5e0003-2e4c-4a31-9b6c-3c2a0e5f6a01(服务端→客户端)
+pub const SERVICE_UUID: uuid::Uuid =
+    uuid::Uuid::from_u128(0x7a5e_0001_2e4c_4a31_9b6c_3c2a_0e5f_6a01);
+pub const WRITE_CHAR_UUID: uuid::Uuid =
+    uuid::Uuid::from_u128(0x7a5e_0002_2e4c_4a31_9b6c_3c2a_0e5f_6a01);
+pub const NOTIFY_CHAR_UUID: uuid::Uuid =
+    uuid::Uuid::from_u128(0x7a5e_0003_2e4c_4a31_9b6c_3c2a_0e5f_6a01);
+
 // ---------------------------------------------------------------------------
 // 平台面
 // ---------------------------------------------------------------------------
@@ -47,6 +58,32 @@ impl BleAddr {
 
     pub fn from_hex(s: &str) -> Result<Self, String> {
         Ok(Self(hex::decode(s).map_err(|e| e.to_string())?))
+    }
+
+    /// 解析 "AA:BB:CC:DD:EE:FF" → 6 字节 MAC(跨驱动统一表示,Linux/Windows 一致)。
+    pub fn from_mac_str(s: &str) -> Result<Self, String> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 6 {
+            return Err(format!("bad mac: {s}"));
+        }
+        let mut out = Vec::with_capacity(6);
+        for p in parts {
+            out.push(u8::from_str_radix(p, 16).map_err(|e| e.to_string())?);
+        }
+        Ok(Self(out))
+    }
+
+    /// 6 字节 MAC → "AA:BB:CC:DD:EE:FF"(非 6 字节时回退 hex)。
+    pub fn to_mac(&self) -> String {
+        if self.0.len() == 6 {
+            self.0
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect::<Vec<_>>()
+                .join(":")
+        } else {
+            self.to_hex()
+        }
     }
 }
 
@@ -531,7 +568,7 @@ impl BleDriver for MockDriver {
                 tx: b_tx,
                 rx: b_rx,
             };
-            let mut incoming = other.incoming.lock().unwrap();
+            let incoming = other.incoming.lock().unwrap();
             match incoming.as_ref() {
                 Some(tx) => {
                     let _ = tx.try_send(conn);

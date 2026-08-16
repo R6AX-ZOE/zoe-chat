@@ -9,14 +9,16 @@
 
 | 设备 | BLE 能力 | 说明 |
 |---|---|---|
-| Linux 电脑/树莓派(BlueZ) | 广播 + GATT 服务端 + 扫描 + 连接 | 生产驱动 `ble-linux`(bluer),`zoe-cli ble` 可直接用 |
-| Windows 电脑 | 扫描 + 连接(central) | `ble-windows` 驱动可用;**广告角色受 SDK 绑定限制不可用** |
+| Linux 电脑/树莓派(BlueZ) | 广播 + GATT 服务端 + 扫描 + 连接 | 生产驱动 `ble-linux`(bluer),`zoe-cli ble` 可直接用;**唯一能承担 GATT 服务端(被连接)角色的节点** |
+| Windows 电脑 | 广播(仅广告)+ 扫描 + 连接 | `ble-windows` 驱动:可被手机**扫描到**(zoe-device),可做 central;**GATT 服务端受 UWP 限制不可用**(GattServiceProvider 需包标识),手机连不上 |
 | Android 手机 + Termux | **仅扫描**(termux-api) | Android 用自家蓝牙栈,**无 BlueZ**,`bluer` 无法工作(`target_os=android` 不编译 `ble-linux`) |
 | Android 手机 + Chrome | Web Bluetooth:扫描/连接/GATT 收发 | 现成的真机 GATT 客户端,无需 root、无需写 App |
 | Android 手机 + nRF Connect | 完整 GATT 客户端(手动) | 备选,支持自定义服务/特性 |
 
 结论:**Termux 端做"扫描验证 + 协议栈测试 + 守护进程真机运行";GATT 收发用 Chrome
-Web Bluetooth 测试页(或 nRF Connect);对端 peripheral 由 Linux 节点承担。**
+Web Bluetooth 测试页(或 nRF Connect);对端 GATT 服务端由 Linux 节点承担。
+只有 Windows + 手机时:Windows 可广播让手机"看见",但完整 GATT 链路仍需要一台
+Linux 节点(树莓派/旧笔记本/虚拟机直通蓝牙均可)。**
 
 ## 2. 推荐拓扑(方案 A:验证完整 GATT 链路)
 
@@ -55,8 +57,15 @@ target/debug/zoe-cli ble adv --name zoe-device --echo
 # 其它命令:ble scan / ble connect <MAC> --send <HEX>
 ```
 
-> Windows 电脑不能当 peripheral;若手头只有 Windows,可先用它做 central
-> (`ble-windows` 驱动扫描/连接)验证手机侧 nRF Connect 模拟的 peripheral。
+> **只有 Windows 电脑时**(无法提供 GATT 服务端):
+> ```sh
+> cargo build -p zoe-cli --features ble-windows
+> target/debug/zoe-cli ble adv --name zoe-device
+> # 手机 termux-bluetooth-scan / Web Bluetooth 选择器能看到 zoe-device(验证广播),
+> # 但连接 GATT 会失败(Windows 无服务端,属预期);
+> # Windows 也可做 central:`zoe-cli ble scan` / `ble connect <MAC> --send <HEX>`
+> # 去连手机侧 nRF Connect 模拟的 peripheral。
+> ```
 
 ### 3.2 手机端准备(Termux)
 
@@ -151,22 +160,28 @@ Android 内核未编译 BlueZ 驱动、控制器被厂商 HAL 独占。仅当设
 | 现象 | 原因与处理 |
 |---|---|
 | `termux-bluetooth-scan` 无输出/报错 | Termux:API 权限未授予;定位未开;蓝牙未开;屏幕熄灭(Android 8.1+ 熄屏停扫) |
-| 扫到设备但名字为空 | 广播未带 local name;用 MAC 匹配(`--filter 18:AA`),或给 `ble adv --name` 传名 |
-| 扫描不到 Linux 端广播 | 适配器未 up/未 discoverable;`zoe-cli ble adv` 需保持运行;两台设备距离过远;信道拥堵换位置 |
-| Chrome 弹窗里没有 zoe-device | 页面按服务 UUID 过滤,对端必须用我们的 `SERVICE_UUID` 广播(`ble adv` 已内置);或改名前缀过滤 |
+| 扫到设备但名字为空 | 广播未带 local name(部分 Windows 版本不发 LocalName);用 MAC 匹配(`--filter 18:AA`),或 Chrome 测试页留空名称前缀按服务 UUID 过滤 |
+| 扫描不到端广播 | 适配器未 up/未 discoverable;`zoe-cli ble adv` 需保持运行;两台设备距离过远;信道拥堵换位置 |
+| Chrome 弹窗里没有 zoe-device | 页面按服务 UUID 过滤,对端必须用我们的 `SERVICE_UUID` 广播(`ble adv` 已内置);或改名前缀过滤;Windows 广播为非可连接广告,能看到但连接会失败 |
 | 写特性报错 | MTU 不足(Android 通常协商 517B,帧 ≤512B);连错设备;先断开重连 |
 | 订阅通知后收不到回显 | 确认对端 `--echo`;旧版 nRF 需先写一帧;驱动已兼容先订阅场景 |
+| Windows 广播后手机能扫到但连不上 | 属预期:Windows 桌面应用无 GATT 服务端(GattServiceProvider 需 UWP);GATT 链路测试需 Linux 节点 |
 | `pkg install bluez` 失败/不可用 | 属预期,Android 无 BlueZ;走 termux-api + Web Bluetooth 路线 |
 | 手机端 `cargo build` 慢 | 首次编译依赖多,耐心等待;`--release` 更慢但产物更小 |
 
 ## 7. 命令速查
 
 ```sh
-# Linux 端
+# Linux 端(全角色)
 cargo build -p zoe-cli --features ble-linux
 zoe-cli ble adv --name zoe-device --echo        # peripheral + 回显
 zoe-cli ble scan --timeout 10                    # 扫描
-zoe-cli ble connect AA:BB:CC:DD:EE --send 5a01020304050607080100000168656c6c6f
+zoe-cli ble connect AA:BB:CC:DD:EE:FF --send 5a01020304050607080100000168656c6c6f
+
+# Windows 端(仅广播/扫描/连接)
+cargo build -p zoe-cli --features ble-windows
+zoe-cli ble adv --name zoe-device                # 仅广播:手机可扫描到,连不上
+zoe-cli ble connect AA:BB:CC:DD:EE:FF            # central:连接手机侧模拟外设
 
 # 手机端(Termux)
 bash scripts/termux/setup-termux.sh

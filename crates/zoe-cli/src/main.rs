@@ -15,7 +15,10 @@ use zoe_core::mls::{MlsIdentity, MlsSession, Processed};
 use zoe_transport::loopback::LoopbackHub;
 use zoe_transport::Transport;
 
-#[cfg(all(feature = "ble-linux", target_os = "linux"))]
+#[cfg(any(
+    all(feature = "ble-linux", target_os = "linux"),
+    all(feature = "ble-windows", windows)
+))]
 mod ble;
 
 const IDENTITY_FILE: &str = "identity.json";
@@ -29,7 +32,10 @@ fn main() {
             let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
             rt.block_on(cmd_demo());
         }
-        #[cfg(all(feature = "ble-linux", target_os = "linux"))]
+        #[cfg(any(
+            all(feature = "ble-linux", target_os = "linux"),
+            all(feature = "ble-windows", windows)
+        ))]
         Some("ble") => {
             let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
             rt.block_on(ble::cmd_ble(&args));

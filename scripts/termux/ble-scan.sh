@@ -116,4 +116,4 @@ done
 
 echo
 echo "提示: zoe 节点广播名默认为 zoe-device,可用 --filter zoe 过滤;"
-echo "      服务 UUID 为 7a5e0001-2e4c-4a31-9b6c-3c2a-0e5f-6a01。"
+echo "      服务 UUID 为 7a5e0001-2e4c-4a31-9b6c-3c2a0e5f6a01。"

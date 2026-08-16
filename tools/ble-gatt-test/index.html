@@ -96,8 +96,8 @@
 </section>
 
 <section class="meta">
-  服务 <code>7a5e0001-2e4c-4a31-9b6c-3c2a-0e5f-6a01</code> ·
-  写 <code>7a5e0002-…</code> · 通知 <code>7a5e0003-…</code><br>
+  服务 <code>7a5e0001-2e4c-4a31-9b6c-3c2a0e5f6a01</code> ·
+  写 <code>7a5e0002-2e4c-4a31-9b6c-3c2a0e5f6a01</code> · 通知 <code>7a5e0003-2e4c-4a31-9b6c-3c2a0e5f6a01</code><br>
   帧格式 <code>[5A | msg_id 8B | ttl 1B | chunk_idx 1B | total 2B | data ≤499B]</code><br>
   前提:Android Chrome(需开启蓝牙与"附近设备"权限);Windows/macOS Chrome 亦可。<br>
   常见问题:扫描不到 → 确认对端正在广播、权限已授、屏幕亮起;写入报错 → 检查 MTU 与帧长 ≤ 512B。
@@ -105,9 +105,9 @@
 
 <script>
 "use strict";
-const SERVICE_UUID = "7a5e0001-2e4c-4a31-9b6c-3c2a-0e5f-6a01";
-const WRITE_UUID   = "7a5e0002-2e4c-4a31-9b6c-3c2a-0e5f-6a01";
-const NOTIFY_UUID  = "7a5e0003-2e4c-4a31-9b6c-3c2a-0e5f-6a01";
+const SERVICE_UUID = "7a5e0001-2e4c-4a31-9b6c-3c2a0e5f6a01";
+const WRITE_UUID   = "7a5e0002-2e4c-4a31-9b6c-3c2a0e5f6a01";
+const NOTIFY_UUID  = "7a5e0003-2e4c-4a31-9b6c-3c2a0e5f6a01";
 const MAX_DATA = 499;
 
 let device = null, server = null, writeChar = null, notifyChar = null, echoWaiter = null;

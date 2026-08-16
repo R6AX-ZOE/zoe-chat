@@ -138,9 +138,9 @@ Android 内核未编译 BlueZ 驱动、控制器被厂商 HAL 独占。仅当设
 
 ```
 [magic 0x5A | msg_id 8B | ttl 1B | chunk_idx 1B | total 2B | data ≤499B]
-服务   7a5e0001-2e4c-4a31-9b6c-3c2a-0e5f-6a01
-写     7a5e0002-2e4c-4a31-9b6c-3c2a-0e5f-6a01(客户端→服务端)
-通知   7a5e0003-2e4c-4a31-9b6c-3c2a-0e5f-6a01(服务端→客户端)
+服务   7a5e0001-2e4c-4a31-9b6c-3c2a0e5f6a01
+写     7a5e0002-2e4c-4a31-9b6c-3c2a0e5f6a01(客户端→服务端)
+通知   7a5e0003-2e4c-4a31-9b6c-3c2a0e5f6a01(服务端→客户端)
 ```
 
 单分片测试帧示例(`hello` 载荷):

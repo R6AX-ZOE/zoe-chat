@@ -3,6 +3,7 @@ package com.zoechat.ble
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattServer
 import android.bluetooth.BluetoothGattServerCallback
 import android.bluetooth.BluetoothGattService
@@ -42,7 +43,17 @@ class ZoeBleServer(context: Context, private val listener: Listener) {
         ZoeFrame.NOTIFY_UUID,
         BluetoothGattCharacteristic.PROPERTY_NOTIFY,
         0
-    )
+    ).apply {
+        // 显式添加 CCCD(0x2902):框架自动添加的 CCCD 在部分机型上权限为 0,
+        // 客户端订阅(写 CCCD)会收到 WriteNotPermitted(ATT 0x03)导致连接失败。
+        addDescriptor(
+            BluetoothGattDescriptor(
+                ZoeFrame.CCCD_UUID,
+                BluetoothGattDescriptor.PERMISSION_READ or
+                    BluetoothGattDescriptor.PERMISSION_WRITE
+            )
+        )
+    }
 
     private val callback = object : BluetoothGattServerCallback() {
 

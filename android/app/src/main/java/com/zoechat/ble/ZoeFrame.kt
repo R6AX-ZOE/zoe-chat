@@ -21,6 +21,8 @@ object ZoeFrame {
     val SERVICE_UUID: UUID = UUID.fromString("7a5e0001-2e4c-4a31-9b6c-3c2a0e5f6a01")
     val WRITE_UUID: UUID = UUID.fromString("7a5e0002-2e4c-4a31-9b6c-3c2a0e5f6a01")
     val NOTIFY_UUID: UUID = UUID.fromString("7a5e0003-2e4c-4a31-9b6c-3c2a0e5f6a01")
+    /** 标准 Client Characteristic Configuration Descriptor(订阅通知用)。 */
+    val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     private val rng = SecureRandom()
 

@@ -16,11 +16,10 @@ fi
 echo "== 1/4 pkg update(仅刷新索引,不做 upgrade)=="
 pkg update -y
 
-echo "== 2/4 安装构建依赖 =="
+echo "== 2/4 安装构建依赖(rust 包已含 cargo,无需单独安装)=="
 pkg install -y \
   git \
   rust \
-  cargo \
   clang \
   binutils \
   pkg-config \

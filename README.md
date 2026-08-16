@@ -1,0 +1,50 @@
+# zoe-chat
+
+轻量化端到端加密消息系统:Linux/Windows 本地守护进程 + Web UI,蓝牙近场网状直连,路径穿越实现去中心化远程通信。群组加密基于 MLS(RFC 9420,openmls)。
+
+设计文档:`DESIGN.md` 及 `docs/`(envelope 格式、SQLite schema、会话协议、API 契约、模块布局)。
+
+## 当前状态
+
+**M0(骨架验证)✅**
+- `zoe-core`:身份层(Ed25519 + BIP39 助记词)、统一信封编解码、openmls 封装
+- `zoe-transport`:Transport trait + loopback 传输
+- `zoe-cli`:init / fingerprint / demo(双节点消息、群组、update)
+
+**M2(近场)✅ 驱动待真机验证**
+- `BleDriver` trait + `MeshOverlay`:BLE GATT 网状覆盖(分片/重组、去重、TTL 存储转发),mock 驱动 5 项测试通过
+- 驱动:bluer(Linux,CI 编译验证)、btleplug + windows-rs(Windows,本机编译验证;广告角色受 SDK 绑定限制暂缺)
+
+**M3(远程)✅**
+- libp2p 远程通道:手动拨号 + mDNS 发现 + DCUtR 打洞,noise 用身份密钥(与 QR 名片同钥)
+- 守护进程消息核心:入站信封分发、KeyPackage 交换、邀请流程、消息路由
+- **双守护进程 E2E 通过**:建群 → 邀请 → 双向加密消息,双方群组状态一致
+
+## 构建与运行
+
+```sh
+# 依赖已锁定在 Cargo.lock;webui 需要先构建(仅当修改了 webui/src)
+cd webui && npm install --save-dev typescript && npm run build && cd ..
+
+cargo test --workspace          # 全量测试
+cargo test -p zoe-transport --features ble-windows   # Windows 下含 BLE mock 测试
+
+cargo run -p zoe-cli -- demo    # M0 双节点 loopback 演示
+
+cargo run -p zoe-daemon -- --data-dir zoe-data
+# 启动后浏览器打开输出的 http://127.0.0.1:<port>,输入访问令牌
+# 双设备互通:一台在 UI 设置页复制"监听地址"发给对方 → 对方在群组详情页粘贴邀请
+# 可选参数:--port N(固定端口)、--token STR(指定令牌)
+```
+
+## 目录结构
+
+```
+crates/
+├─ zoe-core/      身份 · 信封 · MLS 会话 · SQLite 存储
+├─ zoe-transport/ 传输抽象 + loopback
+├─ zoe-cli/       调试 CLI
+└─ zoe-daemon/    HTTP/WS 守护进程 + 内嵌 UI
+webui/            UI 源码(TypeScript)→ dist(编译产物,内嵌进守护进程)
+docs/             协议与接口规格
+```

@@ -1,0 +1,27 @@
+[package]
+name = "zoe-core"
+version.workspace = true
+edition.workspace = true
+description = "zoe-chat core: identity, envelope, MLS session, storage"
+
+[dependencies]
+# 密码学核心:锁版本(openmls pre-1.0,API 变动频繁)
+openmls = "=0.8.1"
+openmls_rust_crypto = "=0.5.1"
+openmls_basic_credential = "=0.5.0"
+openmls_traits = "0.5"
+openmls_sqlite_storage = "=0.2.0"
+ed25519-dalek = "2.2"
+sha2 = "0.10"
+bip39 = "2.2"
+rand = "0.8"
+hex = "0.4"
+thiserror = "2"
+
+# 存储与本地加密
+# rusqlite 与 openmls_sqlite_storage(官方,rusqlite ^0.32)对齐版本,避免 links=sqlite3 冲突
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+argon2 = "0.5"
+chacha20poly1305 = "0.11"

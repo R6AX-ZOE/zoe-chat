@@ -1,0 +1,34 @@
+[package]
+name = "zoe-transport"
+version.workspace = true
+edition.workspace = true
+description = "zoe-chat transport abstraction and implementations"
+
+[features]
+default = ["net"]
+net = ["dep:libp2p"]
+ble-linux = ["dep:bluer"]
+ble-windows = ["dep:btleplug", "dep:windows"]
+
+[dependencies]
+zoe-core = { path = "../zoe-core" }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time", "io-util", "net"] }
+thiserror = "2"
+hex = "0.4"
+uuid = "1"
+futures-util = "0.3"
+libp2p = { version = "0.56", features = ["tcp", "tokio", "mdns", "dcutr", "noise", "yamux", "identify", "macros", "request-response", "cbor", "ed25519", "dns"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+bluer = { version = "0.17", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+btleplug = { version = "0.12", optional = true }
+windows = { version = "0.62", features = [
+  "Devices_Bluetooth_Advertisement",
+  "Devices_Bluetooth_GenericAttributeProfile",
+  "Foundation",
+], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net"] }

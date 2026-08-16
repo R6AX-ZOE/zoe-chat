@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Node (for webui)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build webui
+        working-directory: webui
+        run: |
+          npm install --save-dev typescript
+          npx tsc -p tsconfig.json
+          node scripts/copy-static.mjs
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Test BLE mesh overlay (mock driver)
+        if: runner.os == 'Linux'
+        run: cargo test -p zoe-transport --features ble-linux
+
+      - name: Test BLE mesh overlay (mock driver)
+        if: runner.os == 'Windows'
+        run: cargo test -p zoe-transport --features ble-windows
+
+      - name: Check Linux BLE driver (ubuntu only)
+        if: runner.os == 'Linux'
+        run: cargo check -p zoe-transport --no-default-features --features ble-linux
+
+      - name: Build release
+        run: cargo build --release --workspace

@@ -112,9 +112,11 @@ app/src-tauri/Cargo.toml    # [lib] crate-type = ["staticlib","cdylib","rlib"]; 
 app/src-tauri/Cargo.lock    # 由 CI 生成(本地无 crates.io 网络);有网机器生成后可提交
 app/src-tauri/build.rs      # tauri_build::build()
 app/src-tauri/tauri.conf.json  # identifier com.zoechat.mobile;frontendDist ../dist;
-                            # beforeDevCommand npm run dev(注意:android 配置在 tauri.android.json,
-                            # 不在 tauri.conf.json —— tauri 2.11 起 schema 已移除顶层 android 键)
-app/src-tauri/tauri.android.json  # { "minSdkVersion": 26 }
+                            # beforeDevCommand npm run dev(android 配置在 tauri.android.conf.json,
+                            # 不在 tauri.conf.json —— 顶层 android 键会被 schema 拒绝)
+app/src-tauri/tauri.android.conf.json  # { "bundle": { "android": { "minSdkVersion": 26 } } }
+                            # 注意:平台覆盖文件名是 tauri.android.conf.json(与主配置同结构合并),
+                            # 不是 tauri.android.json —— 写错文件名会静默不生效(minSdk 回退 24)
 app/src-tauri/capabilities/default.json  # permissions: ["core:default"]
 app/src-tauri/icons/        # 全套图标已入库(icon.png 1024² 源图 + tauri icon 生成的各尺寸/android|ios)
 app/src-tauri/src/main.rs   # fn main() { zoe_mobile_lib::run() }
@@ -346,15 +348,21 @@ crates/zoe-cli/src/ble.rs            # 小改:--send-env 与收包重组打印(�
     `com.zoechat.mobile` 不冲突，省去改包名风险。
 12. **echo 与 MeshOverlay 互斥**：M2 启动 MeshOverlay 后必须 `set_echo(false)`，
     否则 Kotlin 的 echo 与 Rust 重组/去重同时处理同一帧（日志会乱，去重仍兜底但不干净）。
-13. **tauri 2.11 配置分家**：android 配置在 `src-tauri/tauri.android.json`（`{"minSdkVersion": 26}`），
-    tauri.conf.json 顶层 `android` 键已被 schema 拒绝（init 报
-    `Additional properties are not allowed ('android' was unexpected)`）。
+13. **平台配置文件名与结构**：android 配置在 `src-tauri/tauri.android.conf.json`
+    （与主配置同结构合并，`{ "bundle": { "android": { "minSdkVersion": 26 } } }`）；
+    tauri.conf.json 顶层 `android` 键被 schema 拒绝（init 报
+    `Additional properties are not allowed ('android' was unexpected)`）；
+    文件名写错（如 `tauri.android.json`）会**静默不生效**，minSdk 回退默认 24
+    （用 `aapt dump badging` 验证 sdkVersion 确认生效）。
 14. **npm 本地可用（镜像代理）**：`npm_config_proxy=http://127.0.0.1:58591` + 默认
     registry.npmmirror.com 可达 → 可本地 `npm install`、`npx tauri icon`；但 esbuild/tauri 的
     postinstall 在沙箱会 EPERM（子进程管道限制），用 `--ignore-scripts`（平台包自带二进制，不影响）。
     注意 npm 全局缓存被 DSH 占用，需 `--cache <项目内目录>`。
 15. **CI 结果经 git 回传**：沙箱无法访问 GitHub REST API（代理只放行 git 与 npm 镜像），
     验收走 `ci/report` 分支（CI force push 结果文件），`git fetch origin ci/report` 读取。
+16. **`#[tauri::command]` 函数不要加 `pub`**：pub 会使宏生成的 `__cmd__*` 名称被再导出，
+    rustc 报 `E0255: the name __cmd__xxx is defined multiple times`（android 目标编译 lib 时实测）；
+    命令函数保持模板默认的私有可见性即可（同 crate 内 test 仍可访问）。
 
 ## 现有资产（可直接复用）
 

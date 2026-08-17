@@ -114,7 +114,9 @@ app/src-tauri/Cargo.lock    # 由 CI 生成(本地无 crates.io 网络);有网�
 app/src-tauri/build.rs      # tauri_build::build()
 app/src-tauri/tauri.conf.json  # identifier com.zoechat.mobile;frontendDist ../dist;
                             # beforeDevCommand npm run dev(android 配置在 tauri.android.conf.json,
-                            # 不在 tauri.conf.json —— 顶层 android 键会被 schema 拒绝)
+                            # 不在 tauri.conf.json —— 顶层 android 键会被 schema 拒绝);
+                            # app.windows 必须有 label:"main" 的窗口(空数组=Android 不创建
+                            # WebView,装机能启动但黑屏 —— 实测,见关键坑 17)
 app/src-tauri/tauri.android.conf.json  # { "bundle": { "android": { "minSdkVersion": 26 } } }
                             # 注意:平台覆盖文件名是 tauri.android.conf.json(与主配置同结构合并),
                             # 不是 tauri.android.json —— 写错文件名会静默不生效(minSdk 回退 24)
@@ -364,6 +366,12 @@ crates/zoe-cli/src/ble.rs            # 小改:--send-env 与收包重组打印(�
 16. **`#[tauri::command]` 函数不要加 `pub`**：pub 会使宏生成的 `__cmd__*` 名称被再导出，
     rustc 报 `E0255: the name __cmd__xxx is defined multiple times`（android 目标编译 lib 时实测）；
     命令函数保持模板默认的私有可见性即可（同 crate 内 test 仍可访问）。
+17. **`app.windows` 不能为空数组**：tauri 运行时在含 Android 的**所有平台**上都是遍历
+    `app.windows` 创建窗口/WebView（`crates/tauri/src/app.rs` setup()）。`"windows": []` 时
+    Android 上 Rust 正常启动但不请求创建 WebView → 进程活着、无崩溃、无 WebView 日志、
+    `android:id/content` 视图树为空 → **黑屏**（实测，adb uiautomator dump 可确认）。
+    必须保留官方模板的 `{ "label": "main", ... }` 窗口（label 与 capabilities 的
+    `windows: ["main"]` 对应，否则 invoke/listen 会被 ACL 拒绝）。
 
 ## M0 验收记录（2026-08-17）
 

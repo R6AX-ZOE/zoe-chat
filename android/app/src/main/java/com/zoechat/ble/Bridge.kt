@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothDevice
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.BufferedWriter
@@ -25,6 +26,8 @@ import java.net.Socket
  * log/frame 在 main 线程)。断线每 2s 重连,幂等。
  */
 object Bridge {
+
+    private const val TAG = "ZoeBridge"
 
     private const val HOST = "127.0.0.1"
     private const val PORT = 18570
@@ -78,6 +81,7 @@ object Bridge {
                 val s = Socket()
                 s.connect(InetSocketAddress(HOST, PORT), CONNECT_TIMEOUT_MS)
                 socket = s
+                Log.i(TAG, "runLoop: 已连接 $HOST:$PORT")
                 val w = BufferedWriter(OutputStreamWriter(s.getOutputStream(), Charsets.UTF_8))
                 val r = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.UTF_8))
                 synchronized(writeLock) { writer = w }
@@ -85,14 +89,18 @@ object Bridge {
                 log("[桥] 已连接 Rust($HOST:$PORT)")
                 while (running) {
                     val line = r.readLine() ?: break
+                    Log.i(TAG, "runLoop: recv [$line]")
                     if (line.isNotBlank()) onCommand(line)
                 }
+                Log.i(TAG, "runLoop: readLine 返回 null(EOF),退出读循环")
             } catch (e: Exception) {
                 if (running) {
+                    Log.i(TAG, "runLoop: 连接异常 ${e.message}")
                     log("[桥] 连接异常: ${e.message ?: e.javaClass.simpleName}," +
                         "${RECONNECT_DELAY_MS / 1000}s 后重连")
                 }
             } finally {
+                Log.i(TAG, "runLoop: finally closeSocket")
                 closeSocket()
             }
             if (!running) break
@@ -117,6 +125,7 @@ object Bridge {
 
     /** 一行 JSON 命令;无法解析/未知类型只记日志,不中断连接。 */
     private fun onCommand(line: String) {
+        Log.i(TAG, "onCommand: $line")
         try {
             val o = JSONObject(line)
             when (o.optString("t")) {
@@ -134,6 +143,7 @@ object Bridge {
     // ---- BLE(主线程) ----
 
     private fun startBle(name: String) {
+        Log.i(TAG, "startBle(name=$name) server=${server != null} ctx=${appContext != null}")
         if (server != null) return
         val ctx = appContext ?: return
         val adv = ZoeAdvertiser(ctx) { line -> log(line) }
@@ -214,12 +224,18 @@ object Bridge {
         o.put("t", t)
         val line = o.toString()
         synchronized(writeLock) {
-            val w = writer ?: return
+            val w = writer ?: run {
+                Log.i(TAG, "sendNow($t): writer=null, 丢弃")
+                return
+            }
+            Log.i(TAG, "sendNow($t): $line")
             try {
                 w.write(line)
                 w.newLine()
                 w.flush()
-            } catch (_: Exception) {
+                Log.i(TAG, "sendNow($t): 已写+flush")
+            } catch (e: Exception) {
+                Log.i(TAG, "sendNow($t): 写异常 ${e.message}")
                 // 写失败:readLine 随后退出,由重连兜底
             }
         }

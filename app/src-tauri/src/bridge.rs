@@ -63,7 +63,10 @@ fn inner() -> &'static BridgeInner {
 }
 
 fn emit_log(app: &AppHandle, line: impl Into<String>) {
-    let _ = app.emit("bridge-log", line.into());
+    let line = line.into();
+    eprintln!("[bridge] emit bridge-log: {line:?}");
+    let r = app.emit("bridge-log", line);
+    eprintln!("[bridge] emit 结果: {r:?}");
 }
 
 fn set_state(s: BridgeState) {
@@ -90,8 +93,13 @@ fn send(v: Value, app: &AppHandle) {
 async fn write_line(w: &mut tokio::net::tcp::OwnedWriteHalf, v: &Value) -> std::io::Result<()> {
     let mut line = v.to_string();
     line.push('\n');
-    w.write_all(line.as_bytes()).await?;
-    w.flush().await
+    eprintln!("[bridge] 写命令: {line:?}");
+    let r = w.write_all(line.as_bytes()).await;
+    eprintln!("[bridge] write_all: {r:?}");
+    r?;
+    let r = w.flush().await;
+    eprintln!("[bridge] flush: {r:?}");
+    r
 }
 
 // ---- tauri commands(异步、幂等;坑 16:命令函数不要 pub,跨模块用 pub(crate)) ----
@@ -188,6 +196,7 @@ async fn handle_conn(stream: TcpStream, app: AppHandle) {
     }
 
     // 连接建立:注册写端 + 状态 Connected + 补发未决的 start
+    eprintln!("[bridge] hello 收到,连接建立");
     *inner().tx.lock().unwrap() = Some(tx.clone());
     set_state(BridgeState::Connected);
     set_error(None);
@@ -220,6 +229,7 @@ async fn handle_conn(stream: TcpStream, app: AppHandle) {
     }
 
     // 断开:清写端 + 状态 Disconnected;accept 循环继续等 Kotlin 重连
+    eprintln!("[bridge] 连接结束(读 EOF/写失败),清理");
     *inner().tx.lock().unwrap() = None;
     set_state(BridgeState::Disconnected);
     emit_log(&app, "[桥] 桥断开,等待 Kotlin 重连");
@@ -228,9 +238,11 @@ async fn handle_conn(stream: TcpStream, app: AppHandle) {
 // ---- K→R 消息(坏行/未知类型:丢弃 + 记日志,不中断连接) ----
 
 async fn on_line(line: &str, app: &AppHandle) {
+    eprintln!("[bridge] 收到行: {line:?}");
     let v: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(e) => {
+            eprintln!("[bridge] 坏行: {e}");
             emit_log(app, format!("[桥] 坏行已丢弃: {e}"));
             return;
         }

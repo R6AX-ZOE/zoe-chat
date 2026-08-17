@@ -8,11 +8,7 @@ pub mod net;
 
 // 帧/MeshOverlay 为平台无关纯逻辑:linux/windows 驱动随各自 feature 编译,
 // mobile(android)只启用 ble-mobile,复用同一份帧与存储转发实现。
-#[cfg(any(
-    feature = "ble-linux",
-    feature = "ble-windows",
-    feature = "ble-mobile"
-))]
+#[cfg(any(feature = "ble-linux", feature = "ble-windows", feature = "ble-mobile"))]
 pub mod ble;
 
 use std::future::Future;

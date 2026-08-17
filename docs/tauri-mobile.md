@@ -1,6 +1,6 @@
 # zoe-mobile：Tauri 2 集成 zoe-core 设计交接
 
-> 状态：**M0 已完成，CI 验收通过**（见"验收记录"；minSdk 26 修正轮待最终 badging 确认）。
+> 状态：**M0 已完成，CI + 真机验收通过**（见"验收记录"；黑屏根因 `windows:[]` 已修复入坑 17）。
 > 本文档供新上下文直接执行，避免重新决策。
 > 未标注"待定"处均为已定决策；执行时若发现与代码事实冲突，先更新本文档再改代码。
 
@@ -387,9 +387,13 @@ CI（android-tauri.yml）run 32027550351（commit de4df18）**成功**，报告�
 - artifact：`zoe-mobile-apk`（Actions 页下载）；`zoe-transport` 共享 ble 模块单测 5/5 绿
   （复用验证）
 - 本地验证（离线）：`cargo check/test -p zoe-transport --no-default-features --features ble-mobile` 通过
+- **真机验收（2026-08-17，小米 Android 15/16，adb uiautomator dump 确认）**：
+  打开 App 显示 `zoe-mobile v0.1.0 / zoe-core 0.1.0` + 示例帧 hex；点"帧回路测试"显示
+  `构造→解析 OK / 帧 hex 5a424242… / msg_id=4242424242424242 ttl=3 片 1/1 数据 16B` —— 验收 2、3 项通过。
+  首版 APK 曾黑屏：根因 `tauri.conf.json app.windows: []`（tauri 遍历 windows 配置创建 WebView，
+  空数组=永不创建 → content 视图为空），修复为 `label:"main"` 窗口后正常（见关键坑 17）。
 
-剩余人工步骤：真机安装 APK → 打开 App 应显示 `zoe-mobile v0.1.0 / zoe-core 0.1.0` 与示例帧 hex；
-点"帧回路测试"应显示 构造==解析 OK（M0 验收第 2、3 项）。
+M0 已闭环，下一里程碑：**M1（回环 TCP 桥 + Kotlin BLE 接入）**。
 
 ## 现有资产（可直接复用）
 

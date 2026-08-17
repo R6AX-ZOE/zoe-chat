@@ -13,5 +13,20 @@
 /android/local.properties
 /android/.idea
 /android/captures
+/android-old/.gradle
+/android-old/build
+/android-old/app/build
+/android-old/local.properties
+/android-old/.idea
+/android-old/captures
 *.apk
 *.aab
+
+# app (Tauri mobile)
+/.npm-cache
+/app/node_modules
+/app/.npm-cache
+/app/dist
+/app/src-tauri/target
+/app/src-tauri/gen/android
+/app/src-tauri/gen/schemas

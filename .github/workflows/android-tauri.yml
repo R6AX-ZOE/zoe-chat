@@ -1,0 +1,101 @@
+name: Android Tauri Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install NDK / platforms / build-tools
+        run: |
+          sdkmanager "ndk;27.0.12077973" "platforms;android-34" "platforms;android-35" "build-tools;34.0.0" --sdk_root="$ANDROID_HOME"
+          echo "$ANDROID_HOME/build-tools/34.0.0" >> "$GITHUB_PATH"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Add android targets
+        run: rustup target add aarch64-linux-android armv7-linux-androideabi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 复用验证:移动侧与 Linux 侧同一份 ble 模块(帧/分片/MeshOverlay),feature ble-mobile 下全量单测
+      - name: Test shared zoe code with ble-mobile
+        run: cargo test -p zoe-transport --no-default-features --features ble-mobile --lib
+
+      - name: Install frontend deps
+        working-directory: app
+        run: npm ci
+
+      - name: Init android project (missing 时生成;gen/android 不入库)
+        working-directory: app
+        run: |
+          if [ ! -d src-tauri/gen/android ]; then
+            npx tauri android init
+          fi
+
+      - name: Build APK
+        working-directory: app
+        run: |
+          set -o pipefail
+          npx tauri android build --apk --debug 2>&1 | tee /tmp/build.log
+
+      - name: Verify APK
+        run: |
+          APK=$(find app/src-tauri/gen/android -name '*.apk' | head -1)
+          test -n "$APK"
+          echo "apk=$APK"
+          ls -la "$APK"
+          sha256sum "$APK"
+          echo "--- native libs (zoe-core/zoe-transport 编入证明) ---"
+          unzip -l "$APK" | grep -E '\.so$'
+          echo "--- badging ---"
+          aapt dump badging "$APK" | grep -E "^(package|application-label|sdkVersion|targetSdkVersion|native-code)"
+
+      - name: Publish M0 report to ci/report
+        if: always()
+        run: |
+          mkdir -p ci
+          {
+            echo "job: ${{ job.status }}"
+            echo "run: $GITHUB_RUN_ID"
+            echo "timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            APK=$(find app/src-tauri/gen/android -name '*.apk' | head -1)
+            if [ -n "$APK" ]; then
+              echo "apk: $APK"
+              ls -la "$APK" | awk '{print "size_bytes:", $5}'
+              sha256sum "$APK" | awk '{print "sha256:", $1}'
+              echo "--- native libs ---"
+              unzip -l "$APK" | grep -E '\.so$' || true
+              echo "--- badging ---"
+              aapt dump badging "$APK" | grep -E "^(package|application-label|sdkVersion|targetSdkVersion|native-code)" || true
+            else
+              echo "apk: NONE"
+            fi
+            if [ "${{ job.status }}" = "failure" ]; then
+              echo "--- build log tail ---"
+              tail -120 /tmp/build.log 2>/dev/null || true
+            fi
+          } > ci/m0-report.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ci/m0-report.txt
+          git commit -m "ci: M0 report (run $GITHUB_RUN_ID, ${{ job.status }})" --allow-empty
+          git push --force origin HEAD:ci/report

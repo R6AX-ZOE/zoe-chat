@@ -9,6 +9,9 @@ default = ["net"]
 net = ["dep:libp2p"]
 ble-linux = ["dep:bluer"]
 ble-windows = ["dep:btleplug", "dep:windows", "dep:windows-future"]
+# mobile(android):复用 ble 模块的帧/MeshOverlay 纯逻辑,无平台驱动
+# (linux/windows 子模块已被 cfg 门控,android 目标下不编译)
+ble-mobile = []
 
 [dependencies]
 zoe-core = { path = "../zoe-core" }

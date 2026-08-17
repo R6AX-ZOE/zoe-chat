@@ -1,0 +1,25 @@
+[package]
+name = "zoe-mobile"
+version = "0.1.0"
+description = "zoe-mobile: Tauri 2 mobile app embedding zoe-core + zoe-transport(ble-mobile)"
+edition = "2021"
+
+[lib]
+name = "zoe_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+# 移动侧不复制 Linux 侧逻辑:帧/分片/MeshOverlay 全部复用 zoe-transport::ble。
+# default-features=false 排除 libp2p(net),移动端不需要。
+zoe-core = { path = "../../crates/zoe-core" }
+zoe-transport = { path = "../../crates/zoe-transport", default-features = false, features = ["ble-mobile"] }
+
+# 独立于根 cargo workspace(自带 Cargo.lock,由 CI/有网络机器生成后提交)
+[workspace]

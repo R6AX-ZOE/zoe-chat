@@ -1,4 +1,4 @@
-name: Android Build
+name: Android Build (Plan B)
 
 on:
   push:
@@ -29,11 +29,11 @@ jobs:
           gradle-version: '8.7'
 
       - name: Build debug APK
-        working-directory: android
+        working-directory: android-old
         run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: zoe-ble-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android-old/app/build/outputs/apk/debug/app-debug.apk

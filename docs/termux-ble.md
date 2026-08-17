@@ -3,7 +3,7 @@
 > 目标:在 Android 手机(Termux)上对 zoe-chat 的 BLE GATT 网状覆盖层做**真机验证**,
 > 并跑通"Linux 节点 ↔ 手机节点"的完整链路。
 > 配套脚本:`scripts/termux/`;手机端 GATT 测试页:`tools/ble-gatt-test/index.html`;
-> 手机 peripheral App:`android/`(zoe BLE 服务端,推荐);Linux 端联调命令:
+> 手机 peripheral App:`android-old/`(zoe BLE 服务端,推荐);Linux 端联调命令:
 > `zoe-cli ble adv|scan|connect`(feature `ble-linux`)。
 
 ## 1. 角色矩阵(先看清谁能干什么)
@@ -13,7 +13,7 @@
 | Linux 电脑/树莓派(BlueZ) | 广播 + GATT 服务端 + 扫描 + 连接 | 生产驱动 `ble-linux`(bluer),`zoe-cli ble` 全角色可用;**唯一能直接承担 GATT 服务端(被连接)角色的节点** |
 | Windows 电脑 | **仅 central**:扫描 + 连接 | `ble-windows` 驱动;**广播不可用**(`BluetoothLEAdvertisementPublisher` 需包标识中的 bluetooth 能力,桌面进程 Start 报 0x80070057;已用 `ble diag` 实测验证,适配器/无线电/载荷均正常仍失败);GATT 服务端同样需 UWP |
 | Android 手机 + Termux | **仅扫描**(termux-api) | Android 用自家蓝牙栈,**无 BlueZ**,`bluer` 无法工作(`target_os=android` 不编译 `ble-linux`) |
-| Android 手机 + zoe App | **peripheral 模拟**(广播 + GATT 服务端) | 本仓库 `android/` 工程(纯 Kotlin,零依赖):广播 zoe 服务、收帧解析、echo 回显 —— **没有 Linux 时的推荐方案**;APK 由 Android Studio 或 CI 构建 |
+| Android 手机 + zoe App | **peripheral 模拟**(广播 + GATT 服务端) | 本仓库 `android-old/` 工程(纯 Kotlin,零依赖):广播 zoe 服务、收帧解析、echo 回显 —— **没有 Linux 时的推荐方案**;APK 由 Android Studio 或 CI 构建 |
 | Android 手机 + nRF Connect | peripheral 模拟 + GATT 客户端(手动) | 免费 App 临时替代,需手动配置服务/特性;zoe App 是正式方案 |
 | Android 手机 + Chrome | Web Bluetooth:扫描/连接/GATT 收发 | 现成的真机 GATT 客户端;**注意 Web Bluetooth 没有广播 API,浏览器只能当 central** |
 | 电脑 Chrome | Web Bluetooth:连接/GATT 收发 | 电脑浏览器也可当 central(前提:服务端在广播 zoe 服务 UUID) |
@@ -45,7 +45,7 @@
 ```
 ┌──────────────────────────────┐       BLE       ┌─────────────────────────────┐
 │ Android 手机 (peripheral)    │ ◄──── GATT ────► │ Windows 电脑 (central)      │
-│ zoe BLE App(android/ 工程)   │  写 7a5e0002…   │ zoe-cli ble connect <MAC>   │
+│ zoe BLE App(android-old/ 工程)   │  写 7a5e0002…   │ zoe-cli ble connect <MAC>   │
 │ 广播 zoe 服务 + echo 回显     │  通知 7a5e0003…  │ 或电脑 Chrome 打开           │
 └──────────────────────────────┘                 │ tools/ble-gatt-test/        │
         ▲                                        └─────────────────────────────┘
@@ -119,8 +119,8 @@ bash scripts/termux/ble-scan.sh --wait-for zoe-device --timeout 60
 **步骤 0(方案 A' 专用):手机运行 zoe BLE App(peripheral)**
 
 1. 构建并安装 APK(任选):
-   - Android Studio 打开 `android/` → 连接手机(USB 调试)→ Run;
-   - 或命令行 `cd android && gradle wrapper && ./gradlew assembleDebug` 后
+   - Android Studio 打开 `android-old/` → 连接手机(USB 调试)→ Run;
+   - 或命令行 `cd android-old && gradle wrapper && ./gradlew assembleDebug` 后
      `adb install -r app/build/outputs/apk/debug/app-debug.apk`
      (也可从 GitHub Actions 的 Android Build 工作流下载 APK 产物);
 2. 打开 App → 授权"附近的设备"(Android 12+)/定位(Android 12 以下)→ 点**启动**;

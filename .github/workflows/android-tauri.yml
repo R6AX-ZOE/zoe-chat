@@ -81,6 +81,13 @@ jobs:
           echo "--- badging ---"
           aapt dump badging "$APK" | grep -E "^(package|application-label|sdkVersion|targetSdkVersion|native-code)"
 
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zoe-mobile-apk
+          path: app/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
+          if-no-files-found: error
+
       - name: Publish M0 report to ci/report
         if: always()
         run: |

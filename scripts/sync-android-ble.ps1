@@ -6,8 +6,11 @@ $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $src = Join-Path $root "android\app\src\main\java\com\zoechat\ble"
 $dst = Join-Path $root "app\src-tauri\gen\android\app\src\main\java\com\zoechat\ble"
 
-if (-not (Test-Path $dst)) {
-    Write-Error "$dst 不存在(先完成 M0:npx tauri android init 并提交 gen/android)"
+# gen/android 不入库(gitignore),由 npx tauri android init 生成;
+# 这里只校验 init 产物存在(ble/ 目录本身由本脚本创建)。
+$genMain = Join-Path $root "app\src-tauri\gen\android\app\src\main"
+if (-not (Test-Path $genMain)) {
+    Write-Error "gen/android 不存在(先跑 npx tauri android init)"
     exit 1
 }
 

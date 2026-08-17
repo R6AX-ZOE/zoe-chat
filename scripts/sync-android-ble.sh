@@ -7,8 +7,10 @@ cd "$(dirname "$0")/.."
 SRC="android/app/src/main/java/com/zoechat/ble"
 DST="app/src-tauri/gen/android/app/src/main/java/com/zoechat/ble"
 
-if [ ! -d "$DST" ]; then
-  echo "error: $DST 不存在(先完成 M0:npx tauri android init 并提交 gen/android)" >&2
+# gen/android 不入库(gitignore),CI 由 npx tauri android init 生成;
+# 这里只校验 init 产物存在(ble/ 目录本身由本脚本创建)。
+if [ ! -d "app/src-tauri/gen/android/app/src/main" ]; then
+  echo "error: gen/android 不存在(先跑 npx tauri android init)" >&2
   exit 1
 fi
 

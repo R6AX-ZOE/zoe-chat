@@ -1,6 +1,7 @@
 # zoe-mobile：Tauri 2 集成 zoe-core 设计交接
 
-> 状态：**M0 实施中（代码就绪，CI 验收中）**。本文档供新上下文直接执行，避免重新决策。
+> 状态：**M0 已完成，CI 验收通过**（见"验收记录"；minSdk 26 修正轮待最终 badging 确认）。
+> 本文档供新上下文直接执行，避免重新决策。
 > 未标注"待定"处均为已定决策；执行时若发现与代码事实冲突，先更新本文档再改代码。
 
 ## 目标
@@ -363,6 +364,24 @@ crates/zoe-cli/src/ble.rs            # 小改:--send-env 与收包重组打印(�
 16. **`#[tauri::command]` 函数不要加 `pub`**：pub 会使宏生成的 `__cmd__*` 名称被再导出，
     rustc 报 `E0255: the name __cmd__xxx is defined multiple times`（android 目标编译 lib 时实测）；
     命令函数保持模板默认的私有可见性即可（同 crate 内 test 仍可访问）。
+
+## M0 验收记录（2026-08-17）
+
+CI（android-tauri.yml）run 32027550351（commit de4df18）**成功**，报告经 `ci/report` 分支回传：
+
+- APK：`app/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`
+  （debug 通用包 520MB/4 ABI；release 会小得多），sha256 `3729608f…`
+- native libs：`lib/arm64-v8a|armeabi-v7a|x86|x86_64/libzoe_mobile_lib.so`
+  —— zoe-core + zoe-transport(ble-mobile) 编入 APK 的证明
+- badging：`package='com.zoechat.mobile' versionName='0.1.0'`，label `zoe-mobile`，
+  targetSdk 36；**sdkVersion=24**（首轮发现 minSdk 配置未生效 → 已修 `tauri.android.conf.json`，
+  后续轮 badging 应为 26）
+- artifact：`zoe-mobile-apk`（Actions 页下载）；`zoe-transport` 共享 ble 模块单测 5/5 绿
+  （复用验证）
+- 本地验证（离线）：`cargo check/test -p zoe-transport --no-default-features --features ble-mobile` 通过
+
+剩余人工步骤：真机安装 APK → 打开 App 应显示 `zoe-mobile v0.1.0 / zoe-core 0.1.0` 与示例帧 hex；
+点"帧回路测试"应显示 构造==解析 OK（M0 验收第 2、3 项）。
 
 ## 现有资产（可直接复用）
 

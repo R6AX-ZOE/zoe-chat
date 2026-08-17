@@ -157,11 +157,13 @@ impl BleDriver for LinuxDriver {
                         continue;
                     };
                     let name = device.name().await.ok().flatten().unwrap_or_default();
-                    // 广播/已知服务 UUID 里带 zoe 服务即标记(属性缺失时 ok() 兜底为 false)
+                    // 广播/已知服务 UUID 里带 zoe 服务即标记
+                    // (uuids() 返回 Result<Option<HashSet>>,属性未知时为 None)
                     let zoe = device
                         .uuids()
                         .await
                         .ok()
+                        .flatten()
                         .map(|u| u.contains(&SERVICE_UUID))
                         .unwrap_or(false);
                     // 统一为 6 字节 MAC 表示(与 windows.rs 一致)

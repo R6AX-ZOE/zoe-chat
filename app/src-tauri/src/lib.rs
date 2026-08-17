@@ -23,8 +23,10 @@ pub struct AppInfo {
 }
 
 /// 版本信息 + 示例帧 hex(M0 验收:装机能显示版本+帧 hex)。
+/// 注意:command 函数不要加 pub —— #[tauri::command] 会生成同名 `__cmd__*` 宏,
+/// pub 触发其再导出,rustc 报 E0255 defined multiple times(实测)。
 #[tauri::command]
-pub fn app_info() -> AppInfo {
+fn app_info() -> AppInfo {
     let frames = frame_chunks([0x42; 8], 3, b"zoe-mobile").expect("frame_chunks");
     AppInfo {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -35,7 +37,7 @@ pub fn app_info() -> AppInfo {
 
 /// 帧 构造→解析 回路冒烟(M0 验收)。复用 Linux 侧同一份 frame_chunks/parse_frame。
 #[tauri::command]
-pub fn hello_frame() -> String {
+fn hello_frame() -> String {
     let data: &[u8] = b"zoe-mobile hello";
     let frames = frame_chunks([0x42; 8], 3, data).expect("frame_chunks");
     let (hdr, payload) = parse_frame(&frames[0]).expect("parse_frame");

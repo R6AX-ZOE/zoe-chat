@@ -36,6 +36,18 @@ jobs:
         with:
           node-version: 22
 
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            app/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       # 复用验证:移动侧与 Linux 侧同一份 ble 模块(帧/分片/MeshOverlay),feature ble-mobile 下全量单测
       - name: Test shared zoe code with ble-mobile
         run: cargo test -p zoe-transport --no-default-features --features ble-mobile --lib

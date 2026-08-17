@@ -6,10 +6,19 @@
 
 use zoe_transport::ble::{frame_chunks, parse_frame};
 
+mod bridge;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![app_info, hello_frame])
+        .invoke_handler(tauri::generate_handler![
+            app_info,
+            hello_frame,
+            bridge::start_bridge,
+            bridge::stop_bridge,
+            bridge::set_echo,
+            bridge::bridge_status
+        ])
         .run(tauri::generate_context!())
         .expect("error while running zoe-mobile");
 }

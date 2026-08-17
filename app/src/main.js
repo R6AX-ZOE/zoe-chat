@@ -32,6 +32,57 @@ async function runHello() {
   }
 }
 
+// M1:回环 TCP 桥 —— 启动 BLE / 停止 / echo 开关 / 状态轮询(见 docs/tauri-mobile.md)
+const statusEl = document.getElementById("bridgeStatus");
+const btnEcho = document.getElementById("btnEcho");
+let echoOn = true;
+let lastConnected = null;
+
+async function refreshBridgeStatus() {
+  try {
+    const s = await invoke("bridge_status");
+    if (s.connected !== lastConnected) {
+      lastConnected = s.connected;
+      log(`[桥] 状态: ${s.connected ? "已连接(Kotlin)" : "未连接"}`);
+    }
+    statusEl.textContent = `桥: ${s.connected ? "已连接" : "未连接"}${
+      s.lastError ? ` · ${s.lastError}` : ""
+    }`;
+  } catch (e) {
+    statusEl.textContent = "桥: 状态查询失败";
+  }
+}
+
+document.getElementById("btnBridgeStart").addEventListener("click", async () => {
+  try {
+    const r = await invoke("start_bridge");
+    log(`[桥] start_bridge → ${r}`);
+  } catch (e) {
+    log(`start_bridge 失败: ${e}`);
+  }
+});
+
+document.getElementById("btnBridgeStop").addEventListener("click", async () => {
+  try {
+    const r = await invoke("stop_bridge");
+    log(`[桥] stop_bridge → ${r}`);
+  } catch (e) {
+    log(`stop_bridge 失败: ${e}`);
+  }
+});
+
+btnEcho.addEventListener("click", async () => {
+  echoOn = !echoOn;
+  try {
+    await invoke("set_echo", { v: echoOn });
+    btnEcho.textContent = `echo: ${echoOn ? "开" : "关"}`;
+    log(`[桥] echo=${echoOn ? "开" : "关"}`);
+  } catch (e) {
+    echoOn = !echoOn; // 失败回滚按钮状态
+    log(`set_echo 失败: ${e}`);
+  }
+});
+
 // M1 预留:回环 TCP 桥日志(见 docs/tauri-mobile.md)
 listen("bridge-log", (e) => log(`[桥] ${e.payload}`)).catch((e) =>
   log(`listen 失败: ${e}`)
@@ -40,5 +91,6 @@ listen("bridge-log", (e) => log(`[桥] ${e.payload}`)).catch((e) =>
 document.getElementById("btnInfo").addEventListener("click", refreshInfo);
 document.getElementById("btnHello").addEventListener("click", runHello);
 
-log("zoe-mobile 控制台就绪(M0)");
+log("zoe-mobile 控制台就绪(M1)");
 refreshInfo();
+setInterval(refreshBridgeStatus, 2000);

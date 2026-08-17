@@ -16,6 +16,9 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
+# 回环 TCP 桥(M1):tokio 已是 tauri 的传递依赖,这里显式声明所需 feature
+# (net/io-util/time/sync/rt/macros —— select! 需要 macros),CI 生成 Cargo.lock 时一并解析。
+tokio = { version = "1", features = ["net", "io-util", "time", "sync", "rt", "macros"] }
 # 移动侧不复制 Linux 侧逻辑:帧/分片/MeshOverlay 全部复用 zoe-transport::ble。
 # default-features=false 排除 libp2p(net),移动端不需要。
 zoe-core = { path = "../../crates/zoe-core" }

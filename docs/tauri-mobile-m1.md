@@ -36,7 +36,7 @@ crates/zoe-transport/    # ble-mobile feature 已加；帧/MeshOverlay 为 mobil
 
    ```powershell
    git -c http.proxy=http://127.0.0.1:58591 fetch -q origin ci/report:refs/remotes/origin/ci/report
-   git show refs/remotes/origin/ci/report:ci/m0-report.txt   # job/run/apk/sha256/badging/失败时构建日志尾
+   git show refs/remotes/origin/ci/report:ci/m1-report.txt   # job/run/apk/sha256/badging/失败时构建日志尾
    ```
 
 5. **真机 adb**：本机 `E:\_Victor_Programming\adb\adb.exe`，手机已连接（小米 Android 15/16，
@@ -83,9 +83,16 @@ crates/zoe-transport/    # ble-mobile feature 已加；帧/MeshOverlay 为 mobil
 
 - 状态机：`BridgeState { Disconnected, Connected }`（Mutex 单例 + 命令通道）；accept 循环常驻；
   accept 后等 Kotlin hello（超时 5s 断开等重连）；写失败/关闭 → Disconnected + bridge-log，继续 accept。
-- 命令（tauri command，异步、幂等）：`start_bridge()`（幂等起监听）、`stop_bridge()`（发 stop）、
+- 命令（tauri command，异步、幂等）：`start_bridge()`（幂等起监听 + **发 start 启动 BLE**；
+  未连接时置 start_requested，hello 到达后补发 start）、`stop_bridge()`（发 stop）、
   `set_echo(v: bool)`、`bridge_status() -> {connected: bool, last_error: Option<String>}`。
 - 事件：`app.emit("bridge-log", line)`（tauri `Emitter` trait）。
+- 实现说明（与本文档第 4 节任务清单的差异，勿回退）：
+  - 命令函数放 `bridge` 模块内、可见性用 **`pub(crate)`**（坑 16 只禁 `pub`；宏源码
+    tauri-macros wrapper.rs：Restricted 可见性与 pub 一样加 `#[macro_export]`，但
+    `use` 在模块内不产生 crate-root 重复定义，pub(crate) 无 E0255；`pub` 在 crate root 会撞）。
+  - `start_bridge` 除起监听外还发 `{"t":"start"}` —— 否则点"启动 BLE 服务"后 Kotlin 只连上
+    TCP 而 BLE 不启动，验收 1 无法通过。
 
 ### 4.3 `app/src-tauri/src/lib.rs` 增补
 
@@ -149,6 +156,9 @@ gen/android 由 CI 每次 `npx tauri android init` 生成（本地无 cmdline-to
 
    建议把这两个 patch 文件放 `android/gen-patches/`（MainActivity.kt / AndroidManifest.xml），
    patch 脚本 cp 覆盖——避免在脚本里内嵌大段内容。
+   （已按 tauri-cli 官方模板逐字核对：Manifest 保持模板的 `Theme.zoe_mobile`、
+   `${usesCleartextTraffic}` 占位符(由 gradle manifestPlaceholders 替换)、FileProvider 等；
+   MainActivity 与模板同构，仅加权限申请 + `Bridge.start(this)`。）
 
 ### 4.5 CI（`android-tauri.yml`）修改
 

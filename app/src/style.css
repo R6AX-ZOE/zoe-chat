@@ -46,6 +46,16 @@ button:hover {
   border-color: #4cc2ff;
 }
 
+.status {
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  background: #1c2436;
+  border: 1px solid #33415c;
+  border-radius: 6px;
+  color: #8fd3a8;
+  font-size: 13px;
+}
+
 #log {
   background: #0a0d14;
   border: 1px solid #1e2739;

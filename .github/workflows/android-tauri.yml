@@ -63,6 +63,16 @@ jobs:
             npx tauri android init
           fi
 
+      # M1:canonical Kotlin(android/ble/*.kt)同步进 gen/android + MainActivity/Manifest patch。
+      # 顺序:init → sync → patch → build。
+      - name: Sync Kotlin BLE sources (android/ → gen/android)
+        working-directory: app
+        run: bash ../scripts/sync-android-ble.sh
+
+      - name: Patch generated android project (MainActivity / Manifest, M1)
+        working-directory: app
+        run: bash ../scripts/patch-android-gen.sh
+
       - name: Build APK
         working-directory: app
         run: |
@@ -88,7 +98,7 @@ jobs:
           path: app/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
           if-no-files-found: error
 
-      - name: Publish M0 report to ci/report
+      - name: Publish M1 report to ci/report
         if: always()
         run: |
           mkdir -p ci
@@ -112,9 +122,9 @@ jobs:
               echo "--- build log tail ---"
               tail -120 /tmp/build.log 2>/dev/null || true
             fi
-          } > ci/m0-report.txt
+          } > ci/m1-report.txt
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ci/m0-report.txt
-          git commit -m "ci: M0 report (run $GITHUB_RUN_ID, ${{ job.status }})" --allow-empty
+          git add ci/m1-report.txt
+          git commit -m "ci: M1 report (run $GITHUB_RUN_ID, ${{ job.status }})" --allow-empty
           git push --force origin HEAD:ci/report

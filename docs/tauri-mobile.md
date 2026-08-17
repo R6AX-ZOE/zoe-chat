@@ -204,10 +204,12 @@ CI 构建前再跑一次（见 CI 规格）。MainActivity/Manifest 例外：它
 - 命令实现（tauri command，全部异步、幂等）：
   - `start_bridge()`：若未监听则 `TcpListener::bind("127.0.0.1:18570")` 起 accept 循环；
     accept 到连接后等待 Kotlin 的 `{"t":"hello","v":1}`（超时 5s 未到则断开等重连），
-    收到后状态置 Connected；重复调用不重复起监听。
+    收到后状态置 Connected；重复调用不重复起监听。**另发 `{"t":"start"}` 启动 BLE**：
+    未连接时先记 start_requested，hello 到达后补发（否则点"启动 BLE 服务"后 BLE 不启动）。
   - `stop_bridge()`：发 `{"t":"stop"}` 给 Kotlin（连接存在时），不关 TCP。
   - `set_echo(v: bool)`：发 `{"t":"echo","v":...}`。
   - `bridge_status() -> BridgeStatus{connected: bool, last_error: Option<String>}`。
+  - 命令放 `bridge` 模块时可见性用 `pub(crate)`（坑 16 只禁 `pub`；pub(crate) 无 E0255）。
 - Kotlin 的 `log` 消息与本地桥状态变化 → `app.emit("bridge-log", line)`。
 - 写失败/连接关闭：状态置 Disconnected，发 `bridge-log`"桥断开，等待 Kotlin 重连"；
   accept 循环继续（Kotlin 会重连，无需 Rust 侧重连逻辑）。
@@ -366,6 +368,9 @@ crates/zoe-cli/src/ble.rs            # 小改:--send-env 与收包重组打印(�
 16. **`#[tauri::command]` 函数不要加 `pub`**：pub 会使宏生成的 `__cmd__*` 名称被再导出，
     rustc 报 `E0255: the name __cmd__xxx is defined multiple times`（android 目标编译 lib 时实测）；
     命令函数保持模板默认的私有可见性即可（同 crate 内 test 仍可访问）。
+    **跨模块（M1 起 bridge.rs）用 `pub(crate)`**：宏源码（tauri-macros wrapper.rs）对
+    `pub`/Restricted 可见性都加 `#[macro_export]`（crate root 定义一次），但 `pub(crate) use`
+    在模块内不产生 crate-root 重复定义 → 无 E0255；crate root 上的 `pub` 才会撞。
 17. **`app.windows` 不能为空数组**：tauri 运行时在含 Android 的**所有平台**上都是遍历
     `app.windows` 创建窗口/WebView（`crates/tauri/src/app.rs` setup()）。`"windows": []` 时
     Android 上 Rust 正常启动但不请求创建 WebView → 进程活着、无崩溃、无 WebView 日志、

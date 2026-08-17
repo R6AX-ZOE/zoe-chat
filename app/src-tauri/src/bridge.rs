@@ -101,7 +101,8 @@ async fn write_line(w: &mut tokio::net::tcp::OwnedWriteHalf, v: &Value) -> std::
 #[tauri::command]
 pub(crate) async fn start_bridge(app: AppHandle) -> Result<String, String> {
     if !inner().listening.swap(true, Ordering::SeqCst) {
-        tauri::async_runtime::spawn(async move { accept_loop(app.clone()).await });
+        let app2 = app.clone();
+        tauri::async_runtime::spawn(async move { accept_loop(app2).await });
     }
     inner().start_requested.store(true, Ordering::SeqCst);
     send(json!({"t": "start", "n": DEFAULT_ADV_NAME}), &app);

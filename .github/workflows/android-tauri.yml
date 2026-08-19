@@ -55,7 +55,8 @@ jobs:
 
       # Web UI(Rust/Leptos → wasm):桌面 daemon 与移动端共用同一份产物。
       # dist 已提交(daemon 与 Tauri app 编译期 include_str!/include_bytes! 内嵌),
-      # 本步骤验证提交的 dist 与源码一致(不一致 → 在有网络机器上跑 webui/scripts/build.sh 后提交)。
+      # 本步骤验证提交的 dist 与源码一致(不一致 → 在 Linux 或容器跑 webui/scripts/build.sh 后提交;
+      # wasm 含宿主相关的 closure-shim 哈希,基准必须是 Linux 构建)。
       - name: Test webui (native unit tests)
         run: cargo test --manifest-path webui/Cargo.toml
 

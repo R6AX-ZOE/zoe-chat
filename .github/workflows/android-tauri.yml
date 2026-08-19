@@ -12,6 +12,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # 缓存 key 的一部分:工具链升级后缓存自动失效,避免存有旧 rustc 产物的 wasm/目标
+      # 被指纹误判为 fresh 而混入新构建(closure-shim hash 随 rustc 版本变化)。
+      RUST_TOOLCHAIN: '1.93.0'
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +35,7 @@ jobs:
       # “Verify committed dist is fresh” 会失败)。升级时:本地重建 dist 后同步此版本号。
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: '1.93.0'
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Add android targets
         run: rustup target add aarch64-linux-android armv7-linux-androideabi wasm32-unknown-unknown
@@ -45,9 +49,9 @@ jobs:
             target
             app/src-tauri/target
             webui/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ env.RUST_TOOLCHAIN }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-${{ env.RUST_TOOLCHAIN }}
 
       # 复用验证:移动侧与 Linux 侧同一份 ble 模块(帧/分片/MeshOverlay),feature ble-mobile 下全量单测
       - name: Test shared zoe code with ble-mobile
@@ -141,6 +145,9 @@ jobs:
             if [ "${{ job.status }}" = "failure" ]; then
               echo "--- build log tail ---"
               tail -120 /tmp/build.log 2>/dev/null || true
+              echo "--- dist diff (wasm 重建与提交不一致时定位) ---"
+              git diff --stat -- webui/dist || true
+              git diff --no-color -- webui/dist | head -250 || true
             fi
           } > ci/m1-report.txt
           git config user.name "github-actions[bot]"

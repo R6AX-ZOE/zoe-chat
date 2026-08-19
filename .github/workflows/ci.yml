@@ -15,6 +15,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # 缓存 key 的一部分:工具链升级后缓存自动失效,避免旧 rustc 产物的 wasm 被复用
+      #(closure-shim hash 随 rustc 版本变化,混入会导致 dist 校验失败)。
+      RUST_TOOLCHAIN: '1.93.0'
     steps:
       - uses: actions/checkout@v4
 
@@ -23,7 +27,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: '1.93.0'
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
 
       - name: Add wasm target (webui)
@@ -41,7 +45,7 @@ jobs:
             ~/.cargo/git
             target
             webui/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ env.RUST_TOOLCHAIN }}
 
       # Web UI(Rust/Leptos → wasm,无 npm/tsc):dist 已提交(zoe-daemon 编译期内嵌)。
       # wasm 产物带 rustc 的 closure-shim 哈希(含宿主信息),Windows 与 Linux 构建不一致,

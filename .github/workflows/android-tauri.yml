@@ -61,7 +61,7 @@ jobs:
 
       - name: Install wasm-bindgen-cli
         run: |
-          WBG=$(awk '/^name = "wasm-bindgen"$/{getline; getline; print $3; exit}' webui/Cargo.lock | tr -d '"')
+          WBG=$(awk '/^name = "wasm-bindgen"$/{getline; print $3; exit}' webui/Cargo.lock | tr -d '"')
           cargo install wasm-bindgen-cli --version "$WBG" --locked
 
       - name: Build webui wasm dist

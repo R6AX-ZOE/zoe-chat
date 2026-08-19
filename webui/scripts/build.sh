@@ -11,8 +11,9 @@ BIN="zoe_webui"
 
 cargo build --release --target "$TARGET"
 
-# 从 Cargo.lock 取 wasm-bindgen 版本(要求 wasm-bindgen-cli 已装同版本)
-WBG=$(awk '/^name = "wasm-bindgen"$/{getline; getline; print $3; exit}' Cargo.lock | tr -d '"')
+# 从 Cargo.lock 取 wasm-bindgen 版本(要求 wasm-bindgen-cli 已装同版本;
+# 注意 name 行之后紧跟 version 行,awk 只 getline 一次)
+WBG=$(awk '/^name = "wasm-bindgen"$/{getline; print $3; exit}' Cargo.lock | tr -d '"')
 if ! wasm-bindgen --version | grep -q "$WBG"; then
   echo "error: wasm-bindgen-cli version mismatch (need $WBG)" >&2
   exit 1

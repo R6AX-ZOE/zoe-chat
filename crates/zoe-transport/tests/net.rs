@@ -1,4 +1,7 @@
 //! NetTransport 集成测试:两个传输端经 TCP 拨号互连,信封双向送达。
+//! 仅当 net feature(libp2p)启用时编译。
+
+#![cfg(feature = "net")]
 
 use std::time::Duration;
 

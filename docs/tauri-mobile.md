@@ -1,8 +1,51 @@
 # zoe-mobile：Tauri 2 集成 zoe-core 设计交接
 
 > 状态：**M0 已完成，CI + 真机验收通过**（见"验收记录"；黑屏根因 `windows:[]` 已修复入坑 17）。
+> **M1 之后（2026-08-19）：Web UI 已用 Rust 重写（Leptos → wasm），桌面 daemon 与移动端共用同一份产物；移动端内嵌守护进程，WebView 直接加载 `http://127.0.0.1:18571/`。见 §0"Rust Web UI 与内嵌守护进程"。**
 > 本文档供新上下文直接执行，避免重新决策。
 > 未标注"待定"处均为已定决策；执行时若发现与代码事实冲突，先更新本文档再改代码。
+
+## 0. Rust Web UI 与内嵌守护进程（2026-08-19 定稿）
+
+**动机**：去掉 JS/TS 工具链（npm/tsc/vite），Web UI 全部用 Rust 编写；桌面与 Android 共用同一份 UI 产物；移动端复用桌面守护进程的全部逻辑（建群/消息/MLS/邀请/配对/设备/设置）。
+
+**架构变化**：
+
+```
+┌────────────────────────── Android 真机 ──────────────────────────┐
+│  WebView → http://127.0.0.1:18571/（内嵌守护进程服务,同源,免 CORS）│
+│   ├─ Rust/Leptos wasm UI（webui/dist,zoe-daemon include! 内嵌）  │
+│   └─ zoe_boot_token 命令（tauri invoke）引导登录令牌              │
+│  ┌──────────────────────▼───────────────────────────────┐        │
+│  │ Rust: zoe-daemon(lib,default-features=false)         │        │
+│  │  ├─ 完整 HTTP/WS API(与桌面完全同构)                  │        │
+│  │  ├─ zoe-core/zoe-transport(ble-mobile)              │        │
+│  │  └─ bridge.rs(回环 TCP 桥 → Kotlin BLE 物理层)        │        │
+│  └──────────────────────────────────────────────────────┘        │
+│                            │ 127.0.0.1:18570(桥,保留)            │
+│  Kotlin: Bridge / ZoeBleServer / ZoeAdvertiser（BLE 物理层）      │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+- **webui/ 为独立 crate（`zoe-webui`）**：Leptos 0.7 CSR → `wasm32-unknown-unknown`，`scripts/build.sh|.ps1` 产出 `dist/`（index.html + styles.css + assets/zoe_webui.js + zoe_webui_bg.wasm）。**dist 与 webui/Cargo.lock 提交入库**（zoe-daemon 编译期 `include_str!/include_bytes!` 内嵌），CI 校验 dist 与源码一致（不一致 → 有网络机器跑 build 脚本后提交）。独立于根 workspace（自带 Cargo.lock；`cargo test --manifest-path webui/Cargo.toml` 跑原生单测，含 i18n 键集合一致性）。
+- **zoe-daemon 拆 lib + bin**：`crates/zoe-daemon/src/lib.rs` 导出 `start(DaemonConfig)`（建库/身份/会话恢复/net 传输/axum 启动）；bin 为薄壳（参数解析 + 打印）。`net` feature 可选：桌面默认开，移动端 `default-features = false` 排除 libp2p。
+- **移动端启动顺序（lib.rs setup）**：① 生成随机令牌 → ② `zoe_daemon::start(DaemonConfig::mobile(data_dir, token))`（`tauri::async_runtime::block_on`，固定端口 18571，绑 127.0.0.1）→ ③ 创建 WebView（`WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))`，先起服务后建窗口，无竞态）。config 里 `app.windows: []`（避免 tauri 先建窗口加载空地址）。
+- **令牌引导**：UI 启动时若无本地令牌 → `window.__TAURI_INTERNALS__.invoke("zoe_boot_token")`（wasm 内 js_sys Reflect 调用，api.rs `tauri_boot_token`）；桌面浏览器无该环境 → 手动登录页。
+- **Android cleartext**：`android/gen-patches/AndroidManifest.xml` 的 application 硬编码 `android:usesCleartextTraffic="true"`（仅回环 127.0.0.1）。
+- **构建管线**：android-tauri.yml 与 ci.yml **不再使用 npm/Node**；tauri CLI 经 `cargo install tauri-cli`。wasm-bindgen-cli 版本 = webui/Cargo.lock 中 wasm-bindgen 版本（脚本自动提取）。
+- **app/ 前端目录已删除**（vite/package.json/src/main.js 控制台 UI 不再使用）；`tauri.conf.json` 保留 `frontendDist: ../../webui/dist`（APK 内打包兜底，实际窗口加载外部 URL 不读取）。
+
+**已知限制（诚实声明）**：
+- 内嵌守护进程的 `/pair/start` 仍只置状态（BLE 广告需桥接 Kotlin，尚未接线——移动端 BLE 配对 UI 显示"驱动不可用"）；BLE 联调仍走 bridge 命令。
+- WebView 加载外链 http://127.0.0.1 时 tauri 的能力（invoke）按窗口 label 匹配，capabilities 的 `windows: ["main"]` 保持。
+- `window.confirm()`（退出群组/吊销设备/恢复身份确认）依赖 WebChromeClient 的 onJsConfirm —— 桌面浏览器与 Android WebView 行为待真机确认；如不可用需改为内联对话框（建群已改为内联对话框，见下）。
+
+**UI 修复记录（2026-08-19，真机/浏览器实测后）**：
+1. **登录报 invalid token**：`api.rs login()` 曾用泛型 `()` 解析响应，而服务端返回 `{"ok":true}`（map）——`()` 只能反序列化 null → 解析失败被 UI 误报"令牌无效"。改为显式 `serde_json::Value`。
+2. **登录页顶部大量空白**：`mount_to_body` 把内容挂到 `<body>`，而 CSS 的 `#app{height:100%}` 作用在**空的** `#app` div 上（占满视口、把内容挤到下方）。改为 `mount_to(#app)`（`leptos::mount::mount_to(el, App).forget()`，el 需 `unchecked_into::<web_sys::HtmlElement>()`）。
+3. **窄窗口无入口**：<640px 侧栏隐藏，而"新建群组/设置"按钮只在侧栏头部 → 顶栏新增 `+`/齿轮按钮（`.nav-action`，所有宽度可见，不隐藏）；<1024px 时设置视图占满主区域 + 返回按钮（`.settings-back`）。
+4. **建群改用内联对话框**：不依赖 `window.prompt`（Android WebView 下 prompt 不可靠）。
+5. **Peer ID 显示乱码**：历史遗留 —— 曾用 PS 5.1 `Get-Content/Set-Content`（默认 GBK 读写）批量改源码，损坏 `app.rs`/`api.rs` 的非 ASCII 字符（`…`/`·`/中文注释）。整体重写为干净 UTF-8（见坑 18）。
 
 ## 目标
 
@@ -11,6 +54,10 @@
 最终真机验证：Windows `zoe-cli ble connect` ↔ 手机 App 全栈 MeshOverlay 互通。
 
 ## 架构总览（定稿）
+
+> ⚠️ 下图与 M0 文件清单为 **2026-08-19 之前的旧架构（Vite 控制台 UI）**，已被 §0"Rust Web UI 与内嵌守护进程"取代：
+> WebView 加载内嵌守护进程的 `http://127.0.0.1:18571/`（同一份 Rust wasm UI），vite/package.json/src/main.js 已删除，
+> 前端构建不再使用 npm。桥（bridge.rs ↔ Kotlin BLE）与 M1 回环 TCP 协议**保持有效**（移动端 BLE 物理层不变）。
 
 ```
 ┌────────────────────────── Android 真机 ──────────────────────────┐
@@ -325,12 +372,10 @@ crates/zoe-cli/src/ble.rs            # 小改:--send-env 与收包重组打印(�
 
 ## 关键坑（实测结论，勿重走）
 
-1. **本地离线构建**：沙箱无 crates.io 网络；cargo 离线时即使锁完整也要求索引候选（索引缓存为空），
-   bluer 的 bluetoothd 依赖（custom_debug/dbus-crossroads 等）无法离线解析。
-   → 本地构建 Windows CLI 时**临时去掉** `crates/zoe-transport/Cargo.toml` 里 bluer 的
-   `features = ["bluetoothd"]`，构建后恢复（勿提交）。已提交的 Cargo.lock 是完整一致的。
-   已验证：该手法下 `cargo check/test -p zoe-transport --no-default-features --features ble-mobile`
-   可本地跑通（ble 模块 5 个单测全绿）。
+1. **本地构建与网络（2026-08-19 更新）**：crates.io **可达**（`cargo search/fetch/install` 正常）；
+   **rustup 分发服务器不可达**，装 target 需镜像：`RUSTUP_DIST_SERVER=https://rsproxy.cn RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup rustup target add wasm32-unknown-unknown`。
+   旧问题（bluer bluetoothd 依赖离线解析失败）仅在断网时存在：临时去掉
+   `crates/zoe-transport/Cargo.toml` 里 bluer 的 `features = ["bluetoothd"]`，构建后恢复（勿提交）。
 2. **图标**：本地 `npx tauri icon src-tauri/icons/icon.png` 可跑（npm 走镜像代理），
    全套图标（含 android/ios 子目录）直接入库，CI 不再生成。
 3. **NDK**：CI 用 `sdkmanager "ndk;27.0.12077973" --sdk_root="$ANDROID_HOME"`（配合
@@ -371,12 +416,21 @@ crates/zoe-cli/src/ble.rs            # 小改:--send-env 与收包重组打印(�
     **跨模块（M1 起 bridge.rs）用 `pub(crate)`**：宏源码（tauri-macros wrapper.rs）对
     `pub`/Restricted 可见性都加 `#[macro_export]`（crate root 定义一次），但 `pub(crate) use`
     在模块内不产生 crate-root 重复定义 → 无 E0255；crate root 上的 `pub` 才会撞。
-17. **`app.windows` 不能为空数组**：tauri 运行时在含 Android 的**所有平台**上都是遍历
-    `app.windows` 创建窗口/WebView（`crates/tauri/src/app.rs` setup()）。`"windows": []` 时
-    Android 上 Rust 正常启动但不请求创建 WebView → 进程活着、无崩溃、无 WebView 日志、
-    `android:id/content` 视图树为空 → **黑屏**（实测，adb uiautomator dump 可确认）。
-    必须保留官方模板的 `{ "label": "main", ... }` 窗口（label 与 capabilities 的
-    `windows: ["main"]` 对应，否则 invoke/listen 会被 ACL 拒绝）。
+17. **`app.windows` 与窗口创建顺序（2026-08-19 更新）**：旧结论"不能为空数组"成立的前提是**没有任何代码创建窗口**（tauri 遍历 config 创建 WebView，空数组=永不创建 → 黑屏）。
+    **Rust Web UI 方案（§0）改为在 setup 内手动创建**：先 `block_on(zoe_daemon::start(...))` 起服务，再
+    `tauri::WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url)).build()` —— 此时
+    `app.windows: []` 是**正确配置**（避免 tauri 先建窗口加载空地址）；窗口 label 仍须与 capabilities 的
+    `windows: ["main"]` 对应（invoke/listen 的 ACL 校验）。
+18. **PS 5.1 默认编码会损坏 UTF-8 源码（实测，代价惨重）**：`Get-Content/Set-Content` 不带 `-Encoding`
+    时按系统 ANSI（中文系统=GBK）读写；对含中文/`·`/`…` 的 UTF-8 文件做批量替换后文件变成乱码
+    （多层往返不可逆）。**规则：Rust 源码一律用专用工具（本会话的 write/edit）或
+    `[System.IO.File]::ReadAllText($f,[Text.Encoding]::UTF8)` + `WriteAllText($f,$s,(New-Object Text.UTF8Encoding($false)))`**；
+    改完用 `Select-String -Pattern "Â|Ã|â‚¬"` 自查。
+19. **`request<T>` 泛型反序列化**：服务端 `{"ok":true}` 类响应**不能**用 `()` 接收（`()` 只认 null），
+    webui 的 `request` 一律显式 `let _: serde_json::Value = request(...).await?`（login 曾因此误报"invalid token"）。
+20. **Leptos 挂载目标**：`mount_to_body` 把内容追加到 `<body>` 末尾；若 CSS 布局依赖 `#app{height:100%}`，
+    必须 `mount_to(#app)`（`get_element_by_id("app")` 后 `unchecked_into::<web_sys::HtmlElement>()`），
+    否则空的 `#app` 占满视口、真实内容被挤到首屏之外。
 
 ## M0 验收记录（2026-08-17）
 

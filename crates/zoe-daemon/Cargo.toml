@@ -2,11 +2,16 @@
 name = "zoe-daemon"
 version.workspace = true
 edition.workspace = true
-description = "zoe-chat daemon: local HTTP/WS API + embedded web UI"
+description = "zoe-chat daemon: local HTTP/WS API + embedded web UI (lib: shared with Tauri mobile)"
+
+[features]
+default = ["net"]
+# libp2p 远程传输(移动端内嵌守护进程时关闭,瘦身)
+net = ["zoe-transport/net"]
 
 [dependencies]
 zoe-core = { path = "../zoe-core" }
-zoe-transport = { path = "../zoe-transport", features = ["net"] }
+zoe-transport = { path = "../zoe-transport", default-features = false }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
@@ -15,5 +20,6 @@ qrcode = "0.14"
 rand = "0.8"
 hex = "0.4"
 sha2 = "0.10"
+base64 = "0.22"
 thiserror = "2"
 futures-util = "0.3"

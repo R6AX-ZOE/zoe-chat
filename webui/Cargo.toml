@@ -1,0 +1,44 @@
+[package]
+name = "zoe-webui"
+version = "0.1.0"
+edition = "2021"
+description = "zoe-chat web UI in Rust(Leptos CSR → wasm32-unknown-unknown),embedded by zoe-daemon and the Tauri mobile app"
+
+# 独立于根 workspace(wasm-only 目标;根 workspace 的 cargo test 不涉及本 crate)
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+leptos = { version = "0.7", features = ["csr"] }
+gloo-net = "0.6"
+gloo-timers = { version = "0.3", features = ["futures"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+console_error_panic_hook = "0.1"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+  "Window",
+  "Document",
+  "Element",
+  "HtmlElement",
+  "HtmlAnchorElement",
+  "HtmlInputElement",
+  "Storage",
+  "Location",
+  "MediaQueryList",
+  "Event",
+  "KeyboardEvent",
+  "InputEvent",
+  "Navigator",
+  "Clipboard",
+  "File",
+  "FileList",
+  "FileReader",
+  "Blob",
+  "Url",
+] }
+futures-util = "0.3"

@@ -18,10 +18,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 工具链固定为生成/提交 webui/dist 用的版本(否则 CI 重建的 wasm 与提交产物不一致,
+      # “Verify committed dist is fresh” 会失败)。升级时:本地重建 dist 后同步此版本号。
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: '1.93.0'
           components: rustfmt, clippy
+
+      - name: Add wasm target (webui)
+        run: rustup target add wasm32-unknown-unknown
 
       - name: Install system deps (dbus for bluer on Linux)
         if: runner.os == 'Linux'
@@ -34,19 +40,25 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
+            webui/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install Node (for webui)
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
+      # Web UI(Rust/Leptos → wasm,无 npm/tsc):dist 已提交(zoe-daemon 编译期内嵌),
+      # 本步骤验证提交的 dist 与源码一致。
+      - name: Test webui (native unit tests)
+        run: cargo test --manifest-path webui/Cargo.toml
 
-      - name: Build webui
-        working-directory: webui
+      - name: Install wasm-bindgen-cli
         run: |
-          npm install --save-dev typescript
-          npx tsc -p tsconfig.json
-          node scripts/copy-static.mjs
+          WBG=$(awk '/^name = "wasm-bindgen"$/{getline; getline; print $3; exit}' webui/Cargo.lock | tr -d '"')
+          cargo install wasm-bindgen-cli --version "$WBG" --locked
+
+      - name: Build webui wasm dist
+        run: bash webui/scripts/build.sh
+
+      - name: Verify committed dist is fresh
+        run: |
+          git diff --exit-code -- webui/dist || { echo "webui/dist 与最新源码不一致 —— 运行 webui/scripts/build.sh 并提交 dist"; exit 1; }
 
       - name: Check formatting
         run: cargo fmt --check
@@ -64,6 +76,9 @@ jobs:
       - name: Test BLE mesh overlay (mock driver)
         if: runner.os == 'Windows'
         run: cargo test -p zoe-transport --features ble-windows
+
+      - name: Test SIG Mesh adapter (mock flood network)
+        run: cargo test -p zoe-transport --no-default-features --features sigmesh
 
       - name: Check Linux BLE driver (ubuntu only)
         if: runner.os == 'Linux'

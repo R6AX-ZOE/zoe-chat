@@ -10,6 +10,9 @@
 </head>
 <body>
   <div id="app"></div>
-  <script type="module" src="/assets/main.js"></script>
+  <script type="module">
+    import init from "/assets/zoe_webui.js";
+    await init("/assets/zoe_webui_bg.wasm");
+  </script>
 </body>
 </html>

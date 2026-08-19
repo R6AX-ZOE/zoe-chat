@@ -22,7 +22,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: &str = "1";
+pub const SCHEMA_VERSION: &str = "2";
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS peers (
   display_name  TEXT,
   trust_status  INTEGER NOT NULL DEFAULT 0,
   first_seen    INTEGER NOT NULL,
-  last_seen     INTEGER
+  last_seen     INTEGER,
+  net_peer_id   TEXT
 );
 CREATE TABLE IF NOT EXISTS key_packages (
   kp_ref        BLOB PRIMARY KEY,
@@ -61,7 +62,8 @@ CREATE TABLE IF NOT EXISTS groups (
   name          TEXT,
   epoch         INTEGER NOT NULL DEFAULT 0,
   coordinator   BLOB,
-  created_at    INTEGER NOT NULL
+  created_at    INTEGER NOT NULL,
+  direct_peer   BLOB
 );
 CREATE TABLE IF NOT EXISTS messages (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,7 +77,8 @@ CREATE TABLE IF NOT EXISTS messages (
   status        INTEGER NOT NULL DEFAULT 0,
   plaintext     BLOB,
   received_at   INTEGER NOT NULL,
-  delivered_at  INTEGER
+  delivered_at  INTEGER,
+  file_downloaded INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_msg_group ON messages(group_id, epoch, seq);
 CREATE INDEX IF NOT EXISTS idx_msg_hash ON messages(msg_hash);
@@ -123,6 +126,7 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
             [SCHEMA_VERSION],
@@ -139,6 +143,46 @@ impl Db {
             conn: Mutex::new(conn),
         }))
     }
+}
+
+/// 旧库增量迁移:CREATE TABLE IF NOT EXISTS 不修改既有表,
+/// 对缺失列执行 ALTER TABLE 补齐(v1 → v2)。
+fn migrate(conn: &Connection) -> Result<(), StorageError> {
+    ensure_column(
+        conn,
+        "groups",
+        "direct_peer",
+        "ALTER TABLE groups ADD COLUMN direct_peer BLOB",
+    )?;
+    ensure_column(
+        conn,
+        "messages",
+        "file_downloaded",
+        "ALTER TABLE messages ADD COLUMN file_downloaded INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        conn,
+        "peers",
+        "net_peer_id",
+        "ALTER TABLE peers ADD COLUMN net_peer_id TEXT",
+    )?;
+    Ok(())
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    ddl: &str,
+) -> Result<(), StorageError> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let cols: Vec<String> = stmt
+        .query_map([], |r| r.get(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !cols.iter().any(|c| c == column) {
+        conn.execute_batch(ddl)?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +264,7 @@ impl ZoeStorage {
             "INSERT INTO peers (peer_id, fingerprint, display_name, trust_status, first_seen, last_seen)
              VALUES (?1, ?2, ?3, ?4, ?5, ?5)
              ON CONFLICT(peer_id) DO UPDATE SET
+               fingerprint = excluded.fingerprint,
                display_name = excluded.display_name,
                trust_status = excluded.trust_status,
                last_seen = excluded.last_seen",
@@ -228,10 +273,20 @@ impl ZoeStorage {
         Ok(())
     }
 
+    /// 记录对端的 libp2p 网络标识(与 peer_id 对应,来自实际建立连接时的地址/入站来源)。
+    pub fn set_peer_net_id(&self, peer_id: &[u8], net_peer_id: &str) -> Result<(), StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE peers SET net_peer_id = ?1 WHERE peer_id = ?2",
+            params![net_peer_id, peer_id],
+        )?;
+        Ok(())
+    }
+
     pub fn peers(&self) -> Result<Vec<PeerRecord>, StorageError> {
         let conn = self.db.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT peer_id, fingerprint, display_name, trust_status, first_seen, last_seen FROM peers ORDER BY first_seen",
+            "SELECT peer_id, fingerprint, display_name, trust_status, first_seen, last_seen, net_peer_id FROM peers ORDER BY first_seen",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(PeerRecord {
@@ -241,9 +296,71 @@ impl ZoeStorage {
                 trust_status: r.get(3)?,
                 first_seen: r.get(4)?,
                 last_seen: r.get(5)?,
+                net_peer_id: r.get(6)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// 更新对端信任状态(0=TOFU 1=已验证 2=已阻止)。失败安全:不存在则报错。
+    pub fn set_peer_trust(&self, peer_id: &[u8], trust_status: i64) -> Result<(), StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE peers SET trust_status = ?1 WHERE peer_id = ?2",
+            params![trust_status, peer_id],
+        )?;
+        if changed == 0 {
+            return Err(StorageError::Sqlite(rusqlite::Error::QueryReturnedNoRows));
+        }
+        Ok(())
+    }
+
+    // --- devices ---
+
+    pub fn upsert_device(
+        &self,
+        device_id: &[u8],
+        user_id: &[u8],
+        user_sig: &[u8],
+        created_at: i64,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO devices (device_id, user_id, user_sig, created_at, revoked_at)
+             VALUES (?1, ?2, ?3, ?4, NULL)
+             ON CONFLICT(device_id) DO UPDATE SET user_id = excluded.user_id, user_sig = excluded.user_sig",
+            params![device_id, user_id, user_sig, created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn devices(&self) -> Result<Vec<DeviceRecord>, StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT device_id, user_id, user_sig, created_at, revoked_at FROM devices ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(DeviceRecord {
+                device_id: r.get(0)?,
+                user_id: r.get(1)?,
+                user_sig: r.get(2)?,
+                created_at: r.get(3)?,
+                revoked_at: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn revoke_device(&self, device_id: &[u8], revoked_at: i64) -> Result<(), StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        let changed = conn.execute(
+            "UPDATE devices SET revoked_at = ?1 WHERE device_id = ?2",
+            params![revoked_at, device_id],
+        )?;
+        if changed == 0 {
+            return Err(StorageError::Sqlite(rusqlite::Error::QueryReturnedNoRows));
+        }
+        Ok(())
     }
 
     // --- groups ---
@@ -282,10 +399,24 @@ impl ZoeStorage {
         Ok(())
     }
 
+    /// 标记群组为私聊(单聊):direct_peer = 对端 libp2p peer id(UTF-8 字节)。
+    pub fn set_group_direct(
+        &self,
+        group_id: &[u8],
+        direct_peer: &[u8],
+    ) -> Result<(), StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE groups SET direct_peer = ?1 WHERE group_id = ?2",
+            params![direct_peer, group_id],
+        )?;
+        Ok(())
+    }
+
     pub fn groups(&self) -> Result<Vec<GroupRecord>, StorageError> {
         let conn = self.db.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT group_id, name, epoch, coordinator, created_at FROM groups ORDER BY created_at",
+            "SELECT group_id, name, epoch, coordinator, created_at, direct_peer FROM groups ORDER BY created_at",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(GroupRecord {
@@ -294,6 +425,7 @@ impl ZoeStorage {
                 epoch: r.get::<_, i64>(2)? as u64,
                 coordinator: r.get(3)?,
                 created_at: r.get(4)?,
+                direct_peer: r.get(5)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -302,7 +434,7 @@ impl ZoeStorage {
     pub fn group(&self, group_id: &[u8]) -> Result<Option<GroupRecord>, StorageError> {
         let conn = self.db.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT group_id, name, epoch, coordinator, created_at FROM groups WHERE group_id = ?1",
+            "SELECT group_id, name, epoch, coordinator, created_at, direct_peer FROM groups WHERE group_id = ?1",
         )?;
         let mut rows = stmt.query(params![group_id])?;
         let row = rows.next()?;
@@ -314,6 +446,7 @@ impl ZoeStorage {
                 epoch: r.get::<_, i64>(2)? as u64,
                 coordinator: r.get(3)?,
                 created_at: r.get(4)?,
+                direct_peer: r.get(5)?,
             })),
         }
     }
@@ -363,7 +496,7 @@ impl ZoeStorage {
     ) -> Result<Vec<MessageRecord>, StorageError> {
         let conn = self.db.conn.lock().unwrap();
         let mut sql = String::from(
-            "SELECT id, msg_hash, envelope, group_id, epoch, sender, seq, direction, status, plaintext, received_at
+            "SELECT id, msg_hash, envelope, group_id, epoch, sender, seq, direction, status, plaintext, received_at, file_downloaded
              FROM messages WHERE group_id = ?",
         );
         let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(group_id.to_vec())];
@@ -390,11 +523,50 @@ impl ZoeStorage {
                 status: r.get(8)?,
                 plaintext: r.get(9)?,
                 received_at: r.get(10)?,
+                file_downloaded: r.get(11)?,
             })
         })?;
         let mut out = rows.collect::<Result<Vec<_>, _>>()?;
         out.reverse();
         Ok(out)
+    }
+
+    /// 按消息哈希查询单条消息(文件下载端点用)。
+    pub fn message_by_hash(&self, msg_hash: &[u8]) -> Result<Option<MessageRecord>, StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, msg_hash, envelope, group_id, epoch, sender, seq, direction, status, plaintext, received_at, file_downloaded
+             FROM messages WHERE msg_hash = ?1",
+        )?;
+        let mut rows = stmt.query(params![msg_hash])?;
+        let row = rows.next()?;
+        match row {
+            None => Ok(None),
+            Some(r) => Ok(Some(MessageRecord {
+                id: r.get(0)?,
+                msg_hash: r.get(1)?,
+                envelope: r.get(2)?,
+                group_id: r.get(3)?,
+                epoch: r.get::<_, i64>(4)? as u64,
+                sender: r.get(5)?,
+                seq: r.get::<_, Option<i64>>(6)?.map(|v| v as u64),
+                direction: r.get(7)?,
+                status: r.get(8)?,
+                plaintext: r.get(9)?,
+                received_at: r.get(10)?,
+                file_downloaded: r.get(11)?,
+            })),
+        }
+    }
+
+    /// 标记文件消息已下载(已写入本地 files/ 目录)。
+    pub fn mark_message_downloaded(&self, msg_hash: &[u8]) -> Result<(), StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE messages SET file_downloaded = 1 WHERE msg_hash = ?1",
+            params![msg_hash],
+        )?;
+        Ok(())
     }
 
     pub fn update_message_status(&self, msg_hash: &[u8], status: i64) -> Result<(), StorageError> {
@@ -403,6 +575,23 @@ impl ZoeStorage {
             "UPDATE messages SET status = ?1 WHERE msg_hash = ?2",
             params![status, msg_hash],
         )?;
+        Ok(())
+    }
+
+    /// 删除群组及其消息(本地退出群组)。同事务保证原子性。
+    pub fn delete_group(&self, group_id: &[u8]) -> Result<(), StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM messages WHERE group_id = ?1",
+            params![group_id],
+        )?;
+        tx.execute(
+            "DELETE FROM pending_proposals WHERE group_id = ?1",
+            params![group_id],
+        )?;
+        tx.execute("DELETE FROM groups WHERE group_id = ?1", params![group_id])?;
+        tx.commit()?;
         Ok(())
     }
 }
@@ -415,6 +604,16 @@ pub struct PeerRecord {
     pub trust_status: i64,
     pub first_seen: i64,
     pub last_seen: Option<i64>,
+    pub net_peer_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeviceRecord {
+    pub device_id: Vec<u8>,
+    pub user_id: Vec<u8>,
+    pub user_sig: Vec<u8>,
+    pub created_at: i64,
+    pub revoked_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -424,6 +623,8 @@ pub struct GroupRecord {
     pub epoch: u64,
     pub coordinator: Option<Vec<u8>>,
     pub created_at: i64,
+    /// 私聊(单聊):对端 libp2p peer id(UTF-8 字节);None = 群聊。
+    pub direct_peer: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -439,6 +640,8 @@ pub struct MessageRecord {
     pub status: i64,
     pub plaintext: Option<Vec<u8>>,
     pub received_at: i64,
+    /// 文件消息是否已下载(已写入本地 files/ 目录)。
+    pub file_downloaded: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -648,5 +851,56 @@ mod tests {
         let n = tampered.len();
         tampered[n - 1] ^= 1;
         assert!(decrypt_seed(&tampered, "correct horse").is_err());
+    }
+
+    #[test]
+    fn direct_group_markers() {
+        let db = Db::open_in_memory().unwrap();
+        let s = ZoeStorage::new(db);
+        let gid = b"direct-1".to_vec();
+        s.create_group(&gid, "alice", 2, None, 1).unwrap();
+        assert!(s.group(&gid).unwrap().unwrap().direct_peer.is_none());
+        s.set_group_direct(&gid, b"12D3KooW-alice-peer-id").unwrap();
+        let g = s.group(&gid).unwrap().unwrap();
+        assert_eq!(
+            g.direct_peer.as_deref(),
+            Some(b"12D3KooW-alice-peer-id".as_slice())
+        );
+        let list = s.groups().unwrap();
+        assert_eq!(
+            list[0].direct_peer.as_deref(),
+            Some(b"12D3KooW-alice-peer-id".as_slice())
+        );
+    }
+
+    #[test]
+    fn file_download_flag() {
+        let db = Db::open_in_memory().unwrap();
+        let s = ZoeStorage::new(db);
+        let gid = b"g".to_vec();
+        s.create_group(&gid, "t", 0, None, 1).unwrap();
+        s.insert_message(b"h1", b"e1", &gid, 0, None, Some(1), 0, 1, Some(b"x"), 10)
+            .unwrap();
+        let m = s.message_by_hash(b"h1").unwrap().unwrap();
+        assert_eq!(m.file_downloaded, 0);
+        s.mark_message_downloaded(b"h1").unwrap();
+        assert_eq!(
+            s.message_by_hash(b"h1").unwrap().unwrap().file_downloaded,
+            1
+        );
+        assert_eq!(s.messages(&gid, 10, None).unwrap()[0].file_downloaded, 1);
+        assert!(s.message_by_hash(b"missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn peer_net_id_mapping() {
+        let db = Db::open_in_memory().unwrap();
+        let s = ZoeStorage::new(db);
+        let pid = b"peer-bytes".to_vec();
+        s.upsert_peer(&pid, b"fp", "alice", 0, 1).unwrap();
+        assert!(s.peers().unwrap()[0].net_peer_id.is_none());
+        s.set_peer_net_id(&pid, "12D3KooW-net-id").unwrap();
+        let p = s.peers().unwrap().remove(0);
+        assert_eq!(p.net_peer_id.as_deref(), Some("12D3KooW-net-id"));
     }
 }

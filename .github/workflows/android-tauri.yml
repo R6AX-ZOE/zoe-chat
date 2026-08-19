@@ -27,14 +27,14 @@ jobs:
           sdkmanager "ndk;27.0.12077973" "platforms;android-34" "platforms;android-35" "build-tools;34.0.0" --sdk_root="$ANDROID_HOME"
           echo "$ANDROID_HOME/build-tools/34.0.0" >> "$GITHUB_PATH"
 
-      - uses: dtolnay/rust-toolchain@stable
+      # 工具链固定为生成/提交 webui/dist 用的版本(否则 CI 重建的 wasm 与提交产物不一致,
+      # “Verify committed dist is fresh” 会失败)。升级时:本地重建 dist 后同步此版本号。
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.93.0'
 
       - name: Add android targets
-        run: rustup target add aarch64-linux-android armv7-linux-androideabi
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
+        run: rustup target add aarch64-linux-android armv7-linux-androideabi wasm32-unknown-unknown
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -44,6 +44,7 @@ jobs:
             ~/.cargo/git
             target
             app/src-tauri/target
+            webui/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
@@ -52,15 +53,33 @@ jobs:
       - name: Test shared zoe code with ble-mobile
         run: cargo test -p zoe-transport --no-default-features --features ble-mobile --lib
 
-      - name: Install frontend deps
-        working-directory: app
-        run: npm ci
+      # Web UI(Rust/Leptos → wasm):桌面 daemon 与移动端共用同一份产物。
+      # dist 已提交(daemon 与 Tauri app 编译期 include_str!/include_bytes! 内嵌),
+      # 本步骤验证提交的 dist 与源码一致(不一致 → 在有网络机器上跑 webui/scripts/build.sh 后提交)。
+      - name: Test webui (native unit tests)
+        run: cargo test --manifest-path webui/Cargo.toml
+
+      - name: Install wasm-bindgen-cli
+        run: |
+          WBG=$(awk '/^name = "wasm-bindgen"$/{getline; getline; print $3; exit}' webui/Cargo.lock | tr -d '"')
+          cargo install wasm-bindgen-cli --version "$WBG" --locked
+
+      - name: Build webui wasm dist
+        run: bash webui/scripts/build.sh
+
+      - name: Verify committed dist is fresh
+        run: |
+          git diff --exit-code -- webui/dist || { echo "webui/dist 与最新源码不一致 —— 运行 webui/scripts/build.sh 并提交 dist"; exit 1; }
+
+      # tauri CLI 经 cargo 安装(无 npm/Node 依赖)。
+      - name: Install tauri CLI (cargo, no npm)
+        run: cargo install tauri-cli --locked
 
       - name: Init android project (missing 时生成;gen/android 不入库)
         working-directory: app
         run: |
           if [ ! -d src-tauri/gen/android ]; then
-            npx tauri android init
+            cargo tauri android init
           fi
 
       # M1:canonical Kotlin(android/ble/*.kt)同步进 gen/android + MainActivity/Manifest patch。
@@ -77,7 +96,7 @@ jobs:
         working-directory: app
         run: |
           set -o pipefail
-          npx tauri android build --apk --debug 2>&1 | tee /tmp/build.log
+          cargo tauri android build --apk --debug 2>&1 | tee /tmp/build.log
 
       - name: Verify APK
         run: |

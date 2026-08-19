@@ -12,6 +12,8 @@ ble-windows = ["dep:btleplug", "dep:windows", "dep:windows-future"]
 # mobile(android):复用 ble 模块的帧/MeshOverlay 纯逻辑,无平台驱动
 # (linux/windows 子模块已被 cfg 门控,android 目标下不编译)
 ble-mobile = []
+# SIG Mesh 适配(docs/DESIGN.md §6.3):纯逻辑,无平台依赖(真机网络层经 trait 接入)
+sigmesh = []
 
 [dependencies]
 zoe-core = { path = "../zoe-core" }

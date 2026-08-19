@@ -1,6 +1,8 @@
 /target
 /.cargo-home
+/.tmp-tauri
 /identity.json
+/zoe-data
 *.log
 /webui/node_modules
 /.smoke
@@ -21,6 +23,9 @@
 /android-old/captures
 *.apk
 *.aab
+
+# webui (Rust/Leptos wasm)
+/webui/target
 
 # app (Tauri mobile)
 /.npm-cache

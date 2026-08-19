@@ -1,19 +1,64 @@
-//! zoe-mobile:Tauri 2 移动端,嵌入 zoe-core + zoe-transport(ble-mobile)。
+//! zoe-mobile:Tauri 2 移动端,嵌入 zoe-core + zoe-transport(ble-mobile)+
+//! **内嵌 zoe-daemon 守护进程**(固定端口 127.0.0.1:18571)。
+//!
+//! WebView 直接加载 `http://127.0.0.1:18571/` —— 与桌面 daemon 同构:
+//! 同一份 Rust 编写的 wasm Web UI(webui/dist,由 zoe-daemon 内嵌并服务)、
+//! 同一份 HTTP/WS API 契约。UI 经 `zoe_boot_token` 命令自动获取访问令牌。
 //!
 //! 复用原则:移动侧不复制 Linux 侧逻辑 —— 帧构造/解析/分片/去重/TTL/MeshOverlay
-//! 全部来自 `zoe-transport::ble`(与 zoe-cli/daemon 同一份代码,feature ble-mobile 门控);
-//! 本 crate 只做命令层薄封装。
+//! 全部来自 `zoe-transport::ble`(feature ble-mobile 门控);守护进程逻辑全部
+//! 来自 `zoe-daemon`(lib,`default-features = false` 排除 libp2p)。
 
+use tauri::Manager;
+use zoe_daemon::state::SharedState;
+use zoe_daemon::DaemonConfig;
 use zoe_transport::ble::{frame_chunks, parse_frame};
 
 mod bridge;
 
+/// 内嵌守护进程句柄(managed state)。
+pub struct EmbeddedDaemon {
+    pub state: SharedState,
+    pub token: String,
+    pub addr: std::net::SocketAddr,
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            // 1) 内嵌守护进程:数据目录 = 应用数据目录;固定端口;随机令牌
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("app data dir: {e}"))?;
+            std::fs::create_dir_all(&data_dir).map_err(|e| format!("mkdir: {e}"))?;
+            let mut bytes = [0u8; 32];
+            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+            let token = hex::encode(bytes);
+            let daemon = tauri::async_runtime::block_on(zoe_daemon::start(DaemonConfig::mobile(
+                data_dir,
+                token.clone(),
+            )))
+            .map_err(|e| format!("embedded daemon start: {e}"))?;
+            app.manage(EmbeddedDaemon {
+                state: daemon.state,
+                token: token.clone(),
+                addr: daemon.addr,
+            });
+
+            // 2) 创建 WebView,加载内嵌守护进程地址(先起服务后建窗口,避免竞态)
+            let url = tauri::Url::parse(&format!("http://{}/", daemon.addr))
+                .map_err(|e| format!("bad url: {e}"))?;
+            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(url))
+                .title("zoe-mobile")
+                .build()?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             hello_frame,
+            zoe_boot_token,
             bridge::start_bridge,
             bridge::stop_bridge,
             bridge::set_echo,
@@ -21,6 +66,15 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running zoe-mobile");
+}
+
+/// UI 引导:返回内嵌守护进程的访问令牌(仅本 App 的 WebView 可调用)。
+#[tauri::command]
+fn zoe_boot_token(app: tauri::AppHandle) -> Result<String, String> {
+    let d = app
+        .try_state::<EmbeddedDaemon>()
+        .ok_or_else(|| "embedded daemon not started".to_string())?;
+    Ok(d.token.clone())
 }
 
 #[derive(serde::Serialize)]

@@ -20,21 +20,24 @@ zoe-chat/
 │  │  ├─ src/ble/windows.rs    # btleplug + windows-rs  [feature=ble-windows]
 │  │  ├─ src/net.rs            # rust-libp2p:mDNS + DCUtR + 可选自建 relay
 │  │  └─ src/sigmesh.rs        # SIG Mesh 适配(Phase 2) [feature=sigmesh]
-│  ├─ zoe-daemon/              # axum HTTP/WS + 事件总线 + 进程编排
-│  │  ├─ src/api.rs            # 端点实现(见 docs/api.md)
+│  ├─ zoe-daemon/              # axum HTTP/WS + 事件总线 + 进程编排(拆 lib + bin)
+│  │  ├─ src/lib.rs            # start(DaemonConfig):库化守护进程(桌面 bin 与 Tauri 移动端共用)
+│  │  ├─ src/api.rs            # 端点实现(见 docs/api.md;内嵌 webui/dist wasm 产物)
 │  │  └─ src/events.rs         # WS 推送
 │  └─ zoe-cli/                 # 调试 CLI:身份初始化、配对、发消息、状态
-├─ webui/                      # 静态资源(vanilla TS,打包进 zoe-daemon)
-│  ├─ src/i18n.ts              # 轻量 i18n:t(key, params)、语言切换、plural 最小集
-│  ├─ src/theme.ts             # 深色/浅色:data-theme + prefers-color-scheme + 手动切换
-│  ├─ src/layout.ts            # 响应式:断点 640/1024,单栏/三栏切换
-│  ├─ styles/themes.css        # CSS 变量主题(light/dark,WCAG AA)
-│  ├─ icons/                   # 自绘 SVG 图标(24×24,stroke 1.5,圆滑路径)
-│  └─ locales/                  # 文案目录(键驱动)
-│     ├─ zh-CN.json
-│     └─ en-US.json            # 可扩展:新增语言 = 加一个 JSON
+├─ webui/                      # Rust Web UI(独立 crate,Leptos CSR → wasm;无 npm/tsc/vite,详见 docs/webui.md)
+│  ├─ Cargo.toml               # zoe-webui:leptos 0.7(csr)/gloo-net/gloo-timers;自带 Cargo.lock(提交入库)
+│  ├─ src/lib.rs               # wasm 入口(#[wasm_bindgen(start)] + mount_to(#app))
+│  ├─ src/app.rs               # 组件:登录/会话列表/消息线程/群组详情/设置(配对·设备·对端·备份恢复·网络·传输)
+│  ├─ src/api.rs               # HTTP/WS 客户端(DTO + Bearer token;响应一律显式 Value;tauri_boot_token 移动端引导)
+│  ├─ src/i18n.rs              # 键驱动词典(zh-CN/en-US 各 113 键,单测校验键集合一致)
+│  ├─ src/theme.rs             # 深色/浅色:data-theme + prefers-color-scheme + 手动切换
+│  ├─ src/icons.rs             # 自绘 SVG 图标(24×24,stroke 1.5,圆滑路径;无 emoji)
+│  ├─ static/                  # 外壳:index.html(wasm 加载器)+ styles.css(CSS 变量主题,WCAG AA)
+│  ├─ scripts/build.sh|.ps1    # cargo build --target wasm32 + wasm-bindgen → dist/(bindgen 版本自锁 Cargo.lock)
+│  └─ dist/                    # 构建产物(提交入库;zoe-daemon 编译期内嵌,CI 校验与源码一致)
 ├─ docs/                       # 本目录规格文档
-└─ .github/workflows/ci.yml    # windows-latest + ubuntu-latest:cargo test + clippy + fmt
+└─ .github/workflows/ci.yml    # windows-latest + ubuntu-latest:cargo test + clippy + fmt + webui wasm 校验
 ```
 
 依赖选型(锁版本):`openmls`、`ed25519-dalek`、`sha2`、`bip39`、`rusqlite`(bundled)、`tokio`、`axum`、`rust-libp2p`、`bluer`、`btleplug`、`windows`、`argon2`、`serde`/`serde_json`、`tracing`。
@@ -88,7 +91,8 @@ impl MlsSession {
 ## 4. 测试策略
 
 - **单元**:信封编解码(往返、截断、超长、未知字段);指纹/助记词向量;storage schema 迁移。
-- **i18n**:CI 校验各语言目录键集合一致、占位符与 `t()` 调用参数匹配。
+- **i18n**:CI 校验各语言键集合一致(webui/src/i18n.rs 单测,zh-CN/en-US 各 113 键);占位符与 `t()` 调用参数匹配。
+- **webui(Rust/Leptos)**:原生目标 `cargo test --manifest-path webui/Cargo.toml`(i18n 键集合等纯逻辑);wasm 产物构建 + `git diff --exit-code webui/dist` 校验提交的 dist 与源码一致(CI 双 workflow 执行)。**源码必须保持 UTF-8**(PS 5.1 默认编码读写会损坏非 ASCII,见 docs/tauri-mobile.md 坑 18)。
 - **集成(核心)**:双节点 loopback 全流程测试——配对 → 建群 → 互发 → update → 加人 → 移除 → 离线重放;乱序/丢包注入(fuzz 调度器)。
 - **协调者故障测试**:协调者离线期间 Proposal 排队,恢复后重放,epoch 一致性。
 - **多传输测试**:同一 Envelope 经 loopback 与 fake-BLE 双路径投递,去重正确。

@@ -2,7 +2,7 @@
 
 轻量化端到端加密消息系统:**Linux 本地守护进程 + Web UI,蓝牙近场网状直连,路径穿越实现去中心化远程通信**。
 
-**详细规格**:`docs/envelope.md`(统一信封与传输帧)· `docs/storage.md`(SQLite schema)· `docs/protocol.md`(会话与排序流程)· `docs/api.md`(HTTP/WS 契约)· `docs/modules.md`(模块布局与测试策略)
+**详细规格**:`docs/envelope.md`(统一信封与传输帧)· `docs/storage.md`(SQLite schema)· `docs/protocol.md`(会话与排序流程)· `docs/api.md`(HTTP/WS 契约)· `docs/modules.md`(模块布局与测试策略)· `docs/webui.md`(Rust Web UI 构建与架构)· `docs/dmls-evaluation.md`(M4:DMLS 评估)
 
 ## 1. 项目定位与目标
 
@@ -80,7 +80,7 @@ MLS 加入群组需要对方的 KeyPackage。没有服务器时:
 MLS 协议假定一个提供**全序**的投递服务(DS):所有提案/提交按同一顺序到达所有成员,epoch 才能一致推进。去中心化网络没有天然全序。方案分级:
 
 - **v1(已定):组协调者 = 每群一个 DS**。由建群者(或轮换选举)承担排序与缓冲职责;协调者只接触密文,零知识;协调者离线时,群组消息仍可通过其他成员之间的直连投递,但**群组结构变更(加人/移除/update)受限**——诚实文档化这一可用性边界。
-- **远期:DMLS(去中心化 MLS)**。IETF 已有活跃草案([draft-kohbrok-mls-dmls-00](https://datatracker.ietf.org/doc/html/draft-kohbrok-mls-dmls-00)、[draft-xue-distributed-mls](https://datatracker.ietf.org/doc/html/draft-xue-distributed-mls)),以 DAG + 共识排序替代中心 DS。等草案稳定后评估接入,不自行发明排序协议。
+- **远期:DMLS(去中心化 MLS)**。IETF 已有活跃草案([draft-kohbrok-mls-dmls-00](https://datatracker.ietf.org/doc/html/draft-kohbrok-mls-dmls-00)、[draft-xue-distributed-mls](https://datatracker.ietf.org/doc/html/draft-xue-distributed-mls)),以 DAG + 共识排序替代中心 DS。等草案稳定后评估接入,不自行发明排序协议。**M4 已完成评估(维持现状,详见 [docs/dmls-evaluation.md](docs/dmls-evaluation.md));零成本改进:协调者可轮换**。
 
 ### 5.4 群组生命周期
 
@@ -129,7 +129,9 @@ MLS 协议假定一个提供**全序**的投递服务(DS):所有提案/提交按
 ## 7. 守护进程与 Web UI
 
 - 守护进程:常驻、开机自启(可选),监听 `127.0.0.1:随机端口`,首次启动生成 token,浏览器访问需携带 token(防本机其他进程/网页跨站调用)。
-- UI:嵌入式静态页面(无框架,vanilla TS + 少量 JS,可离线打包进二进制);提供:会话列表、消息流、QR 指纹验证、设备管理、密钥备份/恢复(助记词)、传输状态指示(BLE/局域网/互联网)。界面文案走 i18n 目录(首发 zh-CN/en-US,可扩展,见 docs/api.md §3)。样式:深色/浅色主题(默认跟随系统,可手动切换);图标统一自绘圆滑路径 SVG,**禁止 emoji 作图标**;移动优先响应式(移动端单栏 / 桌面三栏)。
+- UI:**Rust 编写(Leptos CSR → wasm32-unknown-unknown),零 JS/TS 工具链**(npm/tsc/vite 全部移除;wasm-bindgen 胶水 ~5KB 属运行机制)。产物 `webui/dist`(index.html + styles.css + zoe_webui.js + zoe_webui_bg.wasm)由 zoe-daemon **编译期内嵌并服务**;构建 = `cargo build --target wasm32-unknown-unknown` + wasm-bindgen(`webui/scripts/build.sh|.ps1`),CI 校验提交的 dist 与源码一致。
+- 功能:会话列表、消息流(分页)、QR 指纹验证、配对模式、设备管理(吊销)、密钥备份/恢复(助记词)、对端阻止/带外验证、传输状态指示(BLE/局域网/互联网/SIG Mesh)。界面文案走 i18n 键目录(zh-CN/en-US 各 113 键,CI 校验键集合一致,见 webui/src/i18n.rs)。样式:深色/浅色主题(默认跟随系统,可手动切换);图标统一自绘圆滑路径 SVG,**禁止 emoji 作图标**;移动优先响应式(移动端单栏 / 桌面三栏;<1024px 设置视图占满主区域,顶栏 `+`/齿轮入口所有宽度可见)。构建/开发/平台注意详见 [docs/webui.md](docs/webui.md)。
+- **移动端(Tauri)**:内嵌守护进程(`zoe-daemon` lib,`default-features=false` 排除 libp2p),固定端口 `127.0.0.1:18571`,WebView 加载该地址(同源免 CORS);令牌经 `zoe_boot_token` tauri command 引导;同一份 UI 产物与桌面共用(见 docs/tauri-mobile.md §0)。
 - 所有密钥操作在守护进程内完成,浏览器只拿渲染数据;UI 通过本地 HTTP + WebSocket(仅本机)与守护进程通信。
 
 ## 8. 存储与备份
@@ -160,12 +162,12 @@ MLS 协议假定一个提供**全序**的投递服务(DS):所有提案/提交按
 ## 10. 里程碑
 
 - **M0(骨架验证)✅**:仓库骨架、身份层、openmls 集成、loopback 传输(内存通道)、CLI 验证双人消息 + 群组 + update。
-- **M1(产品外壳)✅**:守护进程 + Web UI:会话、指纹 QR 验证、助记词备份恢复、设备管理;CI 双平台构建(Linux/Windows)。
+- **M1(产品外壳)✅**:守护进程 + Web UI(docs/api.md 全量端点已实现):会话、消息分页、指纹 QR 验证/带外验证流程、配对模式、对端阻止、设备管理(吊销)、助记词备份**与恢复**、传输状态指示(含 SIG Mesh);CI 双平台构建(Linux/Windows)。**2026-08-19:UI 以 Rust 重写(Leptos → wasm,去 npm/tsc/vite),桌面与 Tauri 移动端共用同一份产物**;真机/浏览器实测修复:登录解析、布局挂载、窄窗口入口、建群对话框、源码编码(见 §7、docs/webui.md §5 与 docs/tauri-mobile.md 坑 18-20)。
 - **M2(近场)✅(驱动待真机验证)**:`BleDriver` trait + `MeshOverlay` 存储转发覆盖网(分片/重组、去重、TTL)全部以 mock 驱动测试通过;bluer(Linux)与 btleplug+windows-rs(Windows)驱动已编写并通过编译验证。已知限制:Windows 广告角色受 SDK 绑定限制暂不可用(Windows 以 central 身份连出);GATT server 角色(被连接方)Windows 待 M2.5。真机联调需蓝牙硬件。
 - **M3(远程)✅**:libp2p 远程通道:手动 Peer ID 交换 + mDNS 局域网发现 + DCUtR 打洞(noise 用身份密钥,与 QR 名片同钥);守护进程消息核心(入站分发/KeyPackage 交换/邀请流程/消息路由);**双守护进程 E2E 通过**:建群 → 邀请 → 双向加密消息,双方群组状态一致(epoch/members)。
 - **M2(近场)**:BLE GATT 网状覆盖网,**Linux 先行**,`BleDriver` trait 定稿;多节点存储转发;Windows BLE 驱动紧随补齐(全功能对等目标)。
 - **M3(远程)**:libp2p 远程通道:手动 Peer ID 交换 + DCUtR 打洞(+ 可选自建 relay)。
-- **M4(互通与演进)**:SIG Mesh 适配;评估 DMLS 草案替换协调者排序。
+- **M4(互通与演进)🔄**:SIG Mesh 适配 **✅**(`zoe-transport` feature `sigmesh`:分片/重组/去重/重传 + 网络层 TTL/泛洪抽象,FloodHub mock 全测通过,见 docs/envelope.md §2.2);**DMLS 评估 ✅(结论:维持协调者排序,不替换)**——两份草案均过期、合并语义未决、FS 有损,收益与成本不匹配;再评估触发条件与零成本改进(协调者可轮换)见 docs/dmls-evaluation.md。
 
 ## 11. 决策记录与剩余开放问题
 

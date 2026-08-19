@@ -14,7 +14,8 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.zoe_mobile"
-        android:usesCleartextTraffic="${usesCleartextTraffic}">
+        android:usesCleartextTraffic="true">
+        <!-- 内嵌守护进程 WebView 需 http://127.0.0.1 明文访问(仅回环;见 docs/tauri-mobile.md) -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"

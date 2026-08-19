@@ -14,12 +14,16 @@
 | POST | `/api/v1/peers/:id/block` | 阻止 peer |
 | GET | `/api/v1/card` | 远程名片:`{peer_id, fingerprint, qr: dataURL}` |
 | POST | `/api/v1/card/import` | 导入名片:`{text}`(解析 `zoe://peer/...`) |
-| GET | `/api/v1/groups` | 群组列表(名称、成员数、epoch、协调者状态) |
+| GET | `/api/v1/groups` | 群组列表(名称、成员数、epoch、协调者状态;私聊含 `direct`/`direct_peer`/`direct_peer_id`/`direct_name`) |
 | POST | `/api/v1/groups` | 建群:`{name}` |
 | POST | `/api/v1/groups/:id/invite` | 邀请:`{peer_id}` |
 | POST | `/api/v1/groups/:id/leave` | 退出群组 |
-| GET | `/api/v1/groups/:id/messages?before=&limit=` | 消息分页(envelope+已解密文本) |
+| GET | `/api/v1/groups/:id/messages?before=&limit=` | 消息分页(envelope+已解密文本/文件元数据) |
 | POST | `/api/v1/groups/:id/messages` | 发消息:`{text}` |
+| POST | `/api/v1/groups/:id/files` | 发文件消息:`{name, mime, data}`(data=base64,≤8 MiB;`file_downloaded` 标记小文件自动下载) |
+| GET | `/api/v1/files/:msg_hash` | 下载文件消息内容(流式返回;同时落盘 `files/` 并标记已下载) |
+| GET | `/api/v1/directs` | 单聊(私聊)列表:group_id ↔ 联系人 peer_id 映射 |
+| POST | `/api/v1/directs` | 发起单聊:`{peer_id, addr?}`(addr 可选;已有私聊复用) |
 | GET | `/api/v1/devices` | 设备列表(本用户) |
 | POST | `/api/v1/devices/:id/revoke` | 吊销设备 |
 | GET | `/api/v1/backup/mnemonic` | 生成助记词(需口令确认:`{password}`) |
@@ -48,7 +52,9 @@
 
 - `GET /` → 登录页;`GET /app` → 主界面(会话/群组/设置三个视图)。
 - 资源打包进二进制(`include_str!` 或 `rust-embed`),无外部 CDN 依赖(离线可用)。
-- UI 无框架:vanilla TS,构建产物 < 200KB gzip。
+- UI 无框架:Leptos → wasm(去 npm/tsc/vite),构建产物 < 2MB wasm + 小 js 胶水。
+- **消息内容与文件**:文本消息明文为裸 UTF-8;文件消息为结构化二进制(`0x02 0x01 | name | size | mime | data`,见 `crates/zoe-core/src/content.rs`),大小 ≤ 8 MiB。接收端解密后 ≤ 1 MiB 的小文件**自动落盘**到 `data_dir/files/` 并标记 `file_downloaded`;大文件点击"下载"时经 `GET /files/:msg_hash` 落盘并提供浏览器下载。
+- **单聊(私聊)**:与联系人的单聊 = 双人 MLS 群,`groups.direct_peer` 记录对端 libp2p peer id;发送时信封只定向投递给对端(不广播)。联系人表 `net_peer_id` 记录 libp2p 标识 ↔ zoe peer_id 映射,`/directs` 返回该映射供 UI 从联系人直接打开已有单聊。
 - **多语言(i18n)**:UI 文案走客户端目录 `locales/{zh-CN,en-US}.json`;语言优先级 = 用户设置(`settings.ui_language`)> `navigator.language` > 默认 en-US。服务端不参与翻译:API 只返回数据与错误码,文案由客户端映射,切换即时生效、无需重启。键集合完整性由 CI 校验(见 docs/modules.md §4)。
 - **消息内容**:任意 UTF-8 明文,协议层无语言限制(中文/emoji/RTL 均可);RTL 渲染为 UI 层 CSS 职责(`dir` 属性),与服务端无关。
 - **主题(深色/浅色)**:CSS 变量主题体系,`<html data-theme="light|dark">` 切换;默认跟随 `prefers-color-scheme`,用户选择持久化于 `settings.ui_theme`;对比度按 WCAG AA 校验。

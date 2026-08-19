@@ -4,20 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.zoechat.mobile",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "frontendDist": "../../webui/dist"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "zoe-mobile",
-        "width": 800,
-        "height": 600
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

@@ -27,6 +27,9 @@ use crate::{Availability, Inbound, Transport, TransportError};
 
 const PROTOCOL: &str = "/zoe/envelope/1";
 
+/// request-response 请求上限:信封载荷 16 MiB 上限 + 余量。
+const MAX_REQUEST_SIZE: u64 = 16 * 1024 * 1024 + 1024;
+
 /// 每 peer 待发送队列上限(防内存膨胀)。
 const MAX_PENDING_PER_PEER: usize = 256;
 
@@ -40,10 +43,16 @@ struct Behaviour {
 
 impl Behaviour {
     fn new(key: &Keypair) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // cbor codec 默认请求上限 1 MiB(read 截断即解码失败);
+        // 文件消息(≤8 MiB)需要更大的请求上限。响应仅空 ack。
+        let codec = request_response::cbor::codec::Codec::<Envelope, Vec<u8>>::default()
+            .set_request_size_maximum(MAX_REQUEST_SIZE)
+            .set_response_size_maximum(64 * 1024);
         Ok(Self {
-            request_response: request_response::cbor::Behaviour::new(
+            request_response: request_response::Behaviour::with_codec(
+                codec,
                 [(StreamProtocol::new(PROTOCOL), ProtocolSupport::Full)],
-                request_response::Config::default().with_request_timeout(Duration::from_secs(30)),
+                request_response::Config::default().with_request_timeout(Duration::from_secs(60)),
             ),
             mdns: mdns::tokio::Behaviour::new(mdns::Config::default(), key.public().to_peer_id())?,
             dcutr: dcutr::Behaviour::new(key.public().to_peer_id()),

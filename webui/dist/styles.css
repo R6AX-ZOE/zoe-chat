@@ -168,6 +168,44 @@ a { color: var(--accent); }
 .group-item .gname { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .group-item .gsub { font-size: 12.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* 侧栏联系人分区 */
+.sidebar-section { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.sidebar-section h4 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  padding: 4px 12px 6px;
+}
+.contact-item .gicon { color: var(--text-dim); }
+.contact-item .contact-chat { color: var(--accent); opacity: 0.75; flex: none; }
+.contact-item:hover .contact-chat { opacity: 1; }
+
+/* 文件消息卡片 */
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  min-width: min(240px, 100%);
+}
+.msg.out .file-card { background: var(--accent-soft); border-color: transparent; }
+.file-card .fc-icon { color: var(--accent); flex: none; }
+.file-card .fc-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.file-card .fc-name {
+  font-weight: 550;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-card .fc-sub { font-size: 12px; color: var(--text-dim); }
+.file-card.done .fc-sub { color: var(--ok); }
+.file-card .fc-btn { min-height: 36px; min-width: 40px; padding: 0 8px; }
+
 /* 消息线程 */
 .thread {
   display: flex;
@@ -209,7 +247,7 @@ a { color: var(--accent); }
 .msg .status { display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; }
 
 .empty-hint {
-  margin: auto;
+  margin: 0 auto;
   color: var(--text-dim);
   text-align: center;
   padding: 24px;
@@ -256,6 +294,85 @@ a { color: var(--accent); }
 .field { margin-bottom: 12px; }
 .field label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 5px; }
 .row { display: flex; gap: 8px; align-items: center; }
+.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+
+/* 设备/对端列表行 */
+.list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.list-row:last-child { border-bottom: none; }
+.list-row.muted { opacity: 0.55; }
+.lr-main { display: flex; flex-direction: column; min-width: 0; }
+.lr-name { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lr-sub { font-size: 12px; color: var(--text-dim); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.lr-actions { display: flex; gap: 6px; align-items: center; flex: none; }
+.lr-actions button.icon { min-width: 40px; padding: 0 8px; }
+
+.tag {
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.tag.ok { color: var(--ok); border-color: var(--ok); }
+.tag.danger { color: var(--danger); border-color: var(--danger); }
+
+button.danger-btn {
+  color: var(--danger);
+  border-color: var(--danger);
+  width: 100%;
+}
+button.danger-btn:hover { background: var(--danger); color: var(--bg-elev); }
+
+/* 消息分页 */
+.load-more {
+  align-self: center;
+  margin: 4px 0 2px;
+  font-size: 12.5px;
+  min-height: 36px;
+}
+
+/* 设置视图头(移动端返回按钮;≥1024px 详情面板内不再需要) */
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  min-height: var(--touch-min);
+}
+.settings-title { font-weight: 600; }
+
+/* 新建群组对话框(不依赖 window.prompt;移动端 WebView 兼容) */
+.create-dialog {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 10;
+}
+.create-card {
+  width: min(360px, 100%);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+.create-card h3 { font-size: 15px; margin-bottom: 12px; }
+
+/* 传输状态行 */
+.transport-row { display: flex; justify-content: space-between; align-items: center; }
 
 /* 登录页 */
 .login {
@@ -299,4 +416,14 @@ body[data-view="thread"] .thread { display: flex; }
   .details { display: flex; }
   body[data-view="thread"] .details { display: flex; }
   body[data-view="settings"] .details { display: flex; }
+  /* 设置视图返回按钮在桌面详情面板内不需要(侧栏常驻);头部 +/设置 保持可见 */
+  .settings-back { display: none; }
+}
+
+/* <1024px:设置视图占满主区域(详情面板顶替线程) */
+@media (max-width: 1023px) {
+  body[data-view="settings"] .main { grid-template-columns: 1fr; }
+  body[data-view="settings"] .details { display: flex; border-left: none; }
+  body[data-view="settings"] .thread { display: none; }
+  body[data-view="settings"] .sidebar { display: none; }
 }

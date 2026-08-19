@@ -48,9 +48,8 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-${{ env.RUST_TOOLCHAIN }}
 
       # Web UI(Rust/Leptos → wasm,无 npm/tsc):dist 已提交(zoe-daemon 编译期内嵌)。
-      # wasm 产物带 rustc 的 closure-shim 哈希(含宿主信息),Windows 与 Linux 构建不一致,
-      # 故基准 = Linux 构建:仅在 Linux 上重建并校验提交的 dist(提交前需在 Linux 上跑一遍 build.sh,
-      # 可借容器:docker run --rm -v $PWD:/repo rust:1.93 bash webui/scripts/build.sh)。
+      # wasm 的 closure-shim 导出名哈希与构建环境细节相关(跨平台/跨路径都不一致),
+      # 权威字节由 android-tauri 工作流在 CI 上重建并自提交;本步仅提示,不拦截。
       - name: Test webui (native unit tests)
         run: cargo test --manifest-path webui/Cargo.toml
 
@@ -64,10 +63,15 @@ jobs:
         if: runner.os == 'Linux'
         run: bash webui/scripts/build.sh
 
-      - name: Verify committed dist is fresh
+      - name: Warn if committed dist differs from rebuild
         if: runner.os == 'Linux'
         run: |
-          git diff --exit-code -- webui/dist || { echo "webui/dist 与最新源码不一致 —— 在 Linux(或容器)跑 webui/scripts/build.sh 后提交 dist"; exit 1; }
+          git diff --stat -- webui/dist || true
+          if git diff --quiet -- webui/dist; then
+            echo "dist is fresh"
+          else
+            echo "warning: dist 与本机重建不一致 —— android-tauri 工作流将以 CI 字节为准自动提交"
+          fi
 
       - name: Check formatting
         run: cargo fmt --check

@@ -81,8 +81,9 @@ jobs:
           if git diff --cached --quiet -- webui/dist; then
             echo "dist is fresh"
           else
-            echo "dist 与 CI 重建不一致 —— 提交本机(CI)重建产物"
+            echo "dist 与 CI 重建不一致 —— 提交并推送本机(CI)重建产物"
             git commit -m "ci: regenerate webui/dist (run $GITHUB_RUN_ID)"
+            git push origin HEAD:main
           fi
 
       # tauri CLI 经 cargo 安装(无 npm/Node 依赖)。

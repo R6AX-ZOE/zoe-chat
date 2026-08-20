@@ -54,7 +54,7 @@ fn group_session_persists_across_reload() {
     let alice_provider = ZoeProvider::new(&alice_mls_db).unwrap();
     let bob_provider = OpenMlsRustCrypto::default();
     let alice = MlsIdentity::new("alice", &[0xAA; 32]).unwrap();
-    let bob = MlsIdentity::new("bob", &[0xBB; 32]).unwrap();
+    let _bob = MlsIdentity::new("bob", &[0xBB; 32]).unwrap();
 
     let mut alice_session = MlsSession::load(&alice_provider, b"persist-group")
         .unwrap()

@@ -1,7 +1,9 @@
 //! zoe-chat 守护进程入口(薄壳,逻辑在 lib.rs)。
 //!
-//! 用法:zoe-daemon [--data-dir PATH] [--port N] [--token STR]
+//! 用法:zoe-daemon [--data-dir PATH] [--port N] [--token STR] [--user HEX] [--pin STR]
 //! 默认监听 127.0.0.1 随机端口;首次启动生成访问令牌写入 data-dir/token。
+//! 多用户:`--user` 指定激活用户(user_id hex,默认最近使用);PIN 保护用户
+//! 启动需 `--pin`,否则以锁定模式启动(仅 /users 与 /unlock 可用)。
 
 use std::path::PathBuf;
 
@@ -11,12 +13,16 @@ struct Args {
     data_dir: PathBuf,
     port: u16,
     token: Option<String>,
+    user_id: Option<String>,
+    pin: Option<String>,
 }
 
 fn parse_args() -> Args {
     let mut data_dir = PathBuf::from("zoe-data");
     let mut port: u16 = 0;
     let mut token = None;
+    let mut user_id = None;
+    let mut pin = None;
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < args.len() {
@@ -37,6 +43,14 @@ fn parse_args() -> Args {
                 i += 1;
                 token = Some(args.get(i).expect("--token needs a value").clone());
             }
+            "--user" => {
+                i += 1;
+                user_id = Some(args.get(i).expect("--user needs a value").clone());
+            }
+            "--pin" => {
+                i += 1;
+                pin = Some(args.get(i).expect("--pin needs a value").clone());
+            }
             other => panic!("unknown argument: {other}"),
         }
         i += 1;
@@ -45,6 +59,8 @@ fn parse_args() -> Args {
         data_dir,
         port,
         token,
+        user_id,
+        pin,
     }
 }
 
@@ -59,6 +75,8 @@ async fn run(args: Args) {
         data_dir: args.data_dir.clone(),
         port: args.port,
         token: args.token.clone(),
+        user_id: args.user_id.clone(),
+        pin: args.pin.clone(),
     })
     .await
     .expect("daemon start");
@@ -69,6 +87,18 @@ async fn run(args: Args) {
         println!("access token: {token}");
     }
     println!("data dir: {}", args.data_dir.display());
+    if !zoe_daemon::state::is_unlocked(&daemon.state) {
+        println!(
+            "LOCKED MODE: active user requires a PIN. POST /api/v1/unlock {{pin}} or restart with --pin."
+        );
+    }
+    let user = zoe_daemon::state::active_user(&daemon.state);
+    println!(
+        "active user: {} ({}, {})",
+        user.name,
+        user.kind.as_str(),
+        hex::encode(&user.user_id[..4])
+    );
 
     std::future::pending::<()>().await;
 }

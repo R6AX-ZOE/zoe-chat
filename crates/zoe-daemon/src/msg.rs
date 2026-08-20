@@ -19,10 +19,14 @@ use zoe_core::envelope::{
 use zoe_core::mls::{MlsSession, Processed};
 use zoe_transport::Transport;
 
-use crate::state::{now, SharedState};
+use crate::state::{self, now, SharedState};
 
 /// 处理一条入站信封(由传输订阅任务调用)。
 pub fn handle_inbound(state: &SharedState, from: &str, env: &Envelope) {
+    if !state::is_unlocked(state) {
+        eprintln!("inbound {from}: ignored while locked");
+        return;
+    }
     let gid = &env.group_id;
     match env.msg_type {
         MSG_PRIVATE | MSG_PROPOSAL | MSG_COMMIT => {
@@ -118,8 +122,12 @@ fn handle_control(state: &SharedState, from: &str, env: &Envelope) {
     match t {
         "kp_req" => {
             // 对方索要我们的 KeyPackage:发送 MSG_KEY_PACKAGE 信封
+            let Some(mls) = state::mls_identity(state) else {
+                eprintln!("kp_req: ignored while locked");
+                return;
+            };
             let provider = state.provider.lock().unwrap();
-            let kp = match MlsSession::new_key_package(&*provider, &state.mls_identity) {
+            let kp = match MlsSession::new_key_package(&*provider, &mls) {
                 Ok(kp) => kp,
                 Err(e) => {
                     eprintln!("kp_req: key package generation failed: {e}");
@@ -128,8 +136,7 @@ fn handle_control(state: &SharedState, from: &str, env: &Envelope) {
             };
             drop(provider);
             let reply = Envelope::new(0, MSG_KEY_PACKAGE, vec![], 0, 0, 0, kp);
-            if let Some(net) = &state.net {
-                let net = net.clone();
+            if let Some(net) = state::net_handle(state) {
                 let from = from.to_string();
                 tokio::spawn(async move {
                     let _ = net.send(&from, reply).await;
@@ -186,7 +193,7 @@ fn sessions_epoch(state: &SharedState, gid: &[u8]) -> u64 {
 
 /// 按会话类型投递信封:私聊定向发给 direct_peer,群聊广播全部已连接 peer。
 pub async fn deliver_envelope(state: &SharedState, env: &Envelope) {
-    let Some(net) = &state.net else { return };
+    let Some(net) = state::net_handle(state) else { return };
     let direct_peer = state
         .storage
         .group(&env.group_id)
@@ -232,9 +239,7 @@ pub async fn invite_peer(
     group_id: &[u8],
     addr: &str,
 ) -> Result<serde_json::Value, String> {
-    let net = state
-        .net
-        .clone()
+    let net = state::net_handle(state)
         .ok_or_else(|| "net transport not available".to_string())?;
 
     // 解析目标 peer id
@@ -270,6 +275,7 @@ pub async fn invite_peer(
 
     // 添加成员(协调者):返回 (commit, welcome, epoch)
     let (commit, welcome, epoch) = {
+        let mls = state::mls_identity(state).ok_or_else(|| "locked".to_string())?;
         let mut sessions = state.sessions.lock().unwrap();
         let session = sessions
             .get_mut(group_id)
@@ -278,7 +284,7 @@ pub async fn invite_peer(
         let kp = MlsSession::key_package_from_bytes(&*provider, &kp_bytes)
             .map_err(|e| format!("invalid key package: {e}"))?;
         session
-            .add_member(&*provider, &state.mls_identity, &kp)
+            .add_member(&*provider, &mls, &kp)
             .map_err(|e| format!("add member failed: {e}"))?
     };
     let _ = state.storage.update_group_epoch(group_id, epoch);
@@ -347,9 +353,7 @@ pub async fn start_direct(
     peer_id_hex: &str,
     addr: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    let net = state
-        .net
-        .clone()
+    let net = state::net_handle(state)
         .ok_or_else(|| "net transport not available".to_string())?;
     let pid = hex::decode(peer_id_hex).map_err(|_| "bad peer id".to_string())?;
 
@@ -415,14 +419,15 @@ pub async fn start_direct(
     // 建双人 MLS 群(创建者 + 联系人)
     let mut gid = [0u8; 16];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut gid);
+    let mls = state::mls_identity(state).ok_or_else(|| "locked".to_string())?;
     let (epoch, welcome) = {
         let provider = state.provider.lock().unwrap();
-        let mut session = MlsSession::create_group(&*provider, &state.mls_identity, &gid)
+        let mut session = MlsSession::create_group(&*provider, &mls, &gid)
             .map_err(|e| format!("create group failed: {e}"))?;
         let kp = MlsSession::key_package_from_bytes(&*provider, &kp_bytes)
             .map_err(|e| format!("invalid key package: {e}"))?;
         let (_commit, welcome, epoch) = session
-            .add_member(&*provider, &state.mls_identity, &kp)
+            .add_member(&*provider, &mls, &kp)
             .map_err(|e| format!("add member failed: {e}"))?;
         state.sessions.lock().unwrap().insert(gid.to_vec(), session);
         (epoch, welcome)
@@ -451,11 +456,14 @@ pub async fn start_direct(
     net.send(&target, welcome_env)
         .await
         .map_err(|e| e.to_string())?;
+    let own_peer_id = state::identity(state)
+        .map(|i| hex::encode(i.verifying_key().to_bytes()))
+        .unwrap_or_default();
     let meta = json!({
         "t": "group_meta",
         "name": name,
         "direct": true,
-        "peer_id": hex::encode(state.identity.verifying_key().to_bytes()),
+        "peer_id": own_peer_id,
     });
     let meta_env = Envelope::new(
         0,

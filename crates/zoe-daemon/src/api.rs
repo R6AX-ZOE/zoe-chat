@@ -23,7 +23,7 @@ use zoe_core::storage::StorageError;
 use zoe_transport::Transport;
 
 use crate::msg;
-use crate::state::{ct_eq, now, SharedState};
+use crate::state::{self, ct_eq, now, SharedState};
 
 // ---------------------------------------------------------------------------
 // 错误
@@ -74,6 +74,26 @@ async fn auth(State(state): State<SharedState>, req: Request, next: Next) -> Res
         next.run(req).await
     } else {
         ApiError::Unauthorized.into_response()
+    }
+}
+
+/// 锁定门:未解锁时除用户注册表/解锁外一律 423。
+async fn locked_gate(State(state): State<SharedState>, req: Request, next: Next) -> Response {
+    let path = req.uri().path().to_string();
+    let allowed = path == "/users"
+        || path == "/unlock"
+        || path == "/status"
+        || path.starts_with("/users/");
+    if state::is_unlocked(&state) || allowed {
+        next.run(req).await
+    } else {
+        (
+            StatusCode::LOCKED,
+            Json(json!({
+                "error": { "code": 423, "message": "locked: enter PIN via POST /api/v1/unlock" }
+            })),
+        )
+            .into_response()
     }
 }
 
@@ -129,12 +149,150 @@ async fn login(State(state): State<SharedState>, Json(req): Json<LoginReq>) -> R
     }
 }
 
-async fn me(State(state): State<SharedState>) -> ApiResult {
-    let (_, created_at) = state
-        .storage
-        .identity()
+// ---------------------------------------------------------------------------
+// 用户注册表(docs/api.md §2.3;里程碑 1:PIN 保护 + 锁定模式)
+// ---------------------------------------------------------------------------
+
+fn user_json(u: &zoe_core::users::User) -> Value {
+    json!({
+        "user_id": hex::encode(u.user_id),
+        "name": u.name,
+        "kind": u.kind.as_str(),
+        "created_at": u.created_at,
+        "last_used": u.last_used,
+    })
+}
+
+/// 列出注册表全部用户 + 活跃用户与解锁状态(锁定模式下允许的最小读接口)。
+async fn users_list(State(state): State<SharedState>) -> ApiResult {
+    let users = state
+        .registry
+        .list()
         .map_err(internal)?
-        .ok_or_else(|| ApiError::Internal("no identity".to_string()))?;
+        .iter()
+        .map(user_json)
+        .collect::<Vec<_>>();
+    let active = state::active_user(&state);
+    Ok(Json(json!({
+        "unlocked": state::is_unlocked(&state),
+        "active": user_json(&active),
+        "users": users,
+    })))
+}
+
+#[derive(Deserialize)]
+struct CreateUserReq {
+    name: String,
+    pin: String,
+}
+
+/// 创建新 PIN 用户:独立数据目录 users/<id> + 加密种子 + argon2id 校验串。
+/// 新用户不会自动激活(激活 = 重启 daemon 时指定 --user)。
+async fn create_user(
+    State(state): State<SharedState>,
+    Json(req): Json<CreateUserReq>,
+) -> ApiResult {
+    let name = req.name.trim().to_string();
+    if name.is_empty() || name.len() > 64 {
+        return Err(ApiError::BadRequest(
+            "name must be 1..=64 chars".to_string(),
+        ));
+    }
+    let exists = state
+        .registry
+        .list()
+        .map_err(internal)?
+        .iter()
+        .any(|u| u.name == name);
+    if exists {
+        return Err(ApiError::BadRequest(
+            "a user with this name already exists".to_string(),
+        ));
+    }
+    let id = zoe_core::identity::IdentityKeyPair::generate();
+    let user = state
+        .registry
+        .add_pin_user(&name, &req.pin, &id.seed())
+        .map_err(internal)?;
+    let _ = state.events.send(
+        json!({
+            "type": "user",
+            "event": "created",
+            "user_id": hex::encode(user.user_id),
+        })
+        .to_string(),
+    );
+    Ok(Json(json!({
+        "ok": true,
+        "user": user_json(&user),
+        "note": "activate by restarting the daemon with --user <id>",
+    })))
+}
+
+#[derive(Deserialize)]
+struct UnlockReq {
+    pin: String,
+}
+
+/// 解锁 PIN 用户(锁定模式唯一出口;成功则恢复身份/MLS/net)。
+async fn unlock(State(state): State<SharedState>, Json(req): Json<UnlockReq>) -> ApiResult {
+    let user = crate::unlock(&state, &req.pin).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(Json(json!({
+        "ok": true,
+        "user": user_json(&user),
+        "unlocked": true,
+    })))
+}
+
+#[derive(Deserialize)]
+struct SetPinReq {
+    pin: String,
+}
+
+/// 设置/更换活跃用户的 PIN(需已解锁;统一走注册表重新加密种子)。
+async fn set_pin(
+    State(state): State<SharedState>,
+    Path(uid_hex): Path<String>,
+    Json(req): Json<SetPinReq>,
+) -> ApiResult {
+    if !state::is_unlocked(&state) {
+        return Err(ApiError::BadRequest(
+            "locked: unlock before setting a PIN".to_string(),
+        ));
+    }
+    let active = state::active_user(&state);
+    let uid = hex::decode(&uid_hex).map_err(|_| ApiError::NotFound("user".to_string()))?;
+    if uid != active.user_id {
+        return Err(ApiError::BadRequest(
+            "PIN can only be set for the active user in v1 (switch users by restart)".to_string(),
+        ));
+    }
+    let seed = {
+        let id = state::identity(&state)
+            .ok_or_else(|| ApiError::Internal("identity unavailable".to_string()))?;
+        id.seed()
+    };
+    state
+        .registry
+        .set_pin(&active.user_id, &req.pin, &seed)
+        .map_err(internal)?;
+    // 种子已迁入注册表 users.db;用户 zoe.db 仅留标记位(明文种子不再写入磁盘)
+    let _ = state.storage.set_meta("seed_enc", "1");
+    let _ = state
+        .events
+        .send(json!({"type":"user","event":"pin_set","user_id":uid_hex}).to_string());
+    Ok(Json(json!({
+        "ok": true,
+        "note": "PIN set; the daemon will require it after restart (locked mode until /unlock)",
+    })))
+}
+
+async fn me(State(state): State<SharedState>) -> ApiResult {
+    let active = state::active_user(&state);
+    let identity = state::identity(&state)
+        .ok_or_else(|| ApiError::Internal("locked: identity unavailable".to_string()))?;
+    let mls_identity = state::mls_identity(&state)
+        .ok_or_else(|| ApiError::Internal("locked: mls unavailable".to_string()))?;
     let devices: Vec<Value> = state
         .storage
         .devices()
@@ -149,12 +307,12 @@ async fn me(State(state): State<SharedState>) -> ApiResult {
         })
         .collect();
     Ok(Json(json!({
-        "user_id": hex::encode(state.identity.verifying_key().to_bytes()),
-        "fingerprint": hex::encode(state.identity.fingerprint()),
-        "created_at": created_at,
+        "user_id": hex::encode(identity.verifying_key().to_bytes()),
+        "fingerprint": hex::encode(identity.fingerprint()),
+        "created_at": active.created_at,
         "device": {
-            "name": state.mls_identity.name(),
-            "signature_public_key": hex::encode(state.mls_identity.signature_public_key()),
+            "name": mls_identity.name(),
+            "signature_public_key": hex::encode(mls_identity.signature_public_key()),
         },
         "devices": devices,
         "started_at": state.started_at,
@@ -162,8 +320,10 @@ async fn me(State(state): State<SharedState>) -> ApiResult {
 }
 
 async fn card(State(state): State<SharedState>) -> ApiResult {
-    let fingerprint = hex::encode(state.identity.fingerprint());
-    let peer_id = hex::encode(state.identity.verifying_key().to_bytes());
+    let identity = state::identity(&state)
+        .ok_or_else(|| ApiError::Internal("locked: identity unavailable".to_string()))?;
+    let fingerprint = hex::encode(identity.fingerprint());
+    let peer_id = hex::encode(identity.verifying_key().to_bytes());
     let text = format!("zoe://peer/{peer_id}/{fingerprint}");
     let code = QrCode::new(text.as_bytes()).map_err(|e| ApiError::Internal(e.to_string()))?;
     let qr_svg = code.render::<svg::Color>().min_dimensions(4, 4).build();
@@ -365,9 +525,11 @@ async fn create_group(
     let mut gid = [0u8; 16];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut gid);
     {
+        let mls = state::mls_identity(&state)
+            .ok_or_else(|| ApiError::Internal("locked: mls unavailable".to_string()))?;
         let provider = state.provider.lock().unwrap();
         let session =
-            MlsSession::create_group(&*provider, &state.mls_identity, &gid).map_err(internal)?;
+            MlsSession::create_group(&*provider, &mls, &gid).map_err(internal)?;
         let epoch = session.epoch();
         let members = session.members();
         state.sessions.lock().unwrap().insert(gid.to_vec(), session);
@@ -518,13 +680,15 @@ async fn send_plaintext(
     plaintext: Vec<u8>,
 ) -> Result<[u8; 32], ApiError> {
     let (hash, env_bytes, env, epoch, seq) = {
+        let mls = state::mls_identity(state)
+            .ok_or_else(|| ApiError::Internal("locked: mls unavailable".to_string()))?;
         let mut sessions = state.sessions.lock().unwrap();
         let session = sessions
             .get_mut(gid)
             .ok_or_else(|| ApiError::NotFound("group session".to_string()))?;
         let provider = state.provider.lock().unwrap();
         let ct = session
-            .encrypt(&*provider, &state.mls_identity, &plaintext)
+            .encrypt(&*provider, &mls, &plaintext)
             .map_err(internal)?;
         let epoch = session.epoch();
         drop(provider);
@@ -699,13 +863,15 @@ fn percent_encode_header(s: &str) -> String {
 
 async fn devices(State(state): State<SharedState>) -> ApiResult {
     let rows = state.storage.devices().map_err(internal)?;
+    let mls_identity = state::mls_identity(&state)
+        .ok_or_else(|| ApiError::Internal("locked: mls unavailable".to_string()))?;
     Ok(Json(json!(rows
         .iter()
         .map(|d| {
             json!({
                 "device_id": hex::encode(&d.device_id),
-                "name": if d.device_id == state.mls_identity.signature_public_key() {
-                    state.mls_identity.name().to_string()
+                "name": if d.device_id == mls_identity.signature_public_key() {
+                    mls_identity.name().to_string()
                 } else {
                     format!("device-{}", &hex::encode(&d.device_id)[..8])
                 },
@@ -747,7 +913,9 @@ async fn leave_group(State(state): State<SharedState>, Path(gid_hex): Path<Strin
 }
 
 async fn backup_mnemonic(State(state): State<SharedState>) -> ApiResult {
-    Ok(Json(json!({ "mnemonic": state.identity.to_mnemonic() })))
+    let identity = state::identity(&state)
+        .ok_or_else(|| ApiError::Internal("locked: identity unavailable".to_string()))?;
+    Ok(Json(json!({ "mnemonic": identity.to_mnemonic() })))
 }
 
 #[derive(Deserialize)]
@@ -756,6 +924,12 @@ struct RestoreReq {
 }
 
 async fn restore(State(state): State<SharedState>, Json(req): Json<RestoreReq>) -> ApiResult {
+    // PIN 用户已有自身种子(加密在注册表):恢复会绕过 PIN,直接拒绝
+    if state::active_kind(&state) == zoe_core::users::UserKind::Pin {
+        return Err(ApiError::BadRequest(
+            "restore is only available for plain users; create a new user instead".to_string(),
+        ));
+    }
     let id = zoe_core::identity::IdentityKeyPair::from_mnemonic(req.mnemonic.trim())
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
     state
@@ -803,14 +977,15 @@ async fn post_settings(
 
 async fn transports(State(state): State<SharedState>) -> ApiResult {
     // loopback + net(libp2p)常驻;BLE/SIG Mesh 驱动未挂载时如实上报 down
-    let net_up = state.net.is_some();
+    let net_up = state::net_handle(&state).is_some();
+    let net_peers = state::net_handle(&state).map(|n| n.peers().len()).unwrap_or(0);
     Ok(Json(json!({
         "ble": "down",
         "lan": "down",
         "net": if net_up { "up" } else { "down" },
         "loopback": "up",
         "sigmesh": "down",
-        "net_peers": state.net.as_ref().map(|n| n.peers().len()).unwrap_or(0),
+        "net_peers": net_peers,
     })))
 }
 
@@ -819,8 +994,8 @@ async fn transports(State(state): State<SharedState>) -> ApiResult {
 // ---------------------------------------------------------------------------
 
 async fn net_addr(State(state): State<SharedState>) -> ApiResult {
-    match &state.net {
-        Some(net) => net_addr_impl(net),
+    match state::net_handle(&state) {
+        Some(net) => net_addr_impl(&net),
         None => Err(ApiError::NotFound(
             "net transport not available".to_string(),
         )),
@@ -855,9 +1030,7 @@ struct DialReq {
 }
 
 async fn net_dial(State(state): State<SharedState>, Json(req): Json<DialReq>) -> ApiResult {
-    let net = state
-        .net
-        .clone()
+    let net = state::net_handle(&state)
         .ok_or_else(|| ApiError::NotFound("net transport not available".to_string()))?;
     net.dial(&req.addr).await.map_err(internal)?;
     Ok(Json(json!({ "ok": true })))
@@ -936,6 +1109,9 @@ pub fn router(state: SharedState) -> Router {
         .layer(DefaultBodyLimit::max(14 * 1024 * 1024));
 
     let protected = Router::new()
+        .route("/users", get(users_list).post(create_user))
+        .route("/users/{id}/set-pin", post(set_pin))
+        .route("/unlock", post(unlock))
         .route("/me", get(me))
         .route("/card", get(card))
         .route("/card/import", post(import_card))
@@ -963,6 +1139,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/settings", get(get_settings).post(post_settings))
         .route("/transports", get(transports))
         .route("/events", get(events_ws))
+        .route_layer(middleware::from_fn_with_state(state.clone(), locked_gate))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state.clone());
 

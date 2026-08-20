@@ -3,6 +3,7 @@
 //! 子命令:
 //!   init [--dir PATH]       生成身份,写入 identity.json(seed/指纹/助记词)
 //!   fingerprint [--dir PATH] 打印本机身份指纹
+//!   user <list|add|set-pin|activate>  多用户注册表管理(data_dir/users.db)
 //!   demo                    双节点 loopback 演示:配对→建群→双向消息→update
 //!   ble <adv|scan|connect>  BLE 真机联调(Linux,feature ble-linux,见 docs/termux-ble.md)
 
@@ -12,6 +13,7 @@ use openmls_rust_crypto::OpenMlsRustCrypto;
 use zoe_core::envelope::{Envelope, FLAG_MULTIPATH, MSG_PRIVATE};
 use zoe_core::identity::IdentityKeyPair;
 use zoe_core::mls::{MlsIdentity, MlsSession, Processed};
+use zoe_core::users::{UserRegistry, UserKind};
 use zoe_transport::loopback::LoopbackHub;
 use zoe_transport::Transport;
 
@@ -28,6 +30,7 @@ fn main() {
     match args.get(1).map(String::as_str) {
         Some("init") => cmd_init(&args),
         Some("fingerprint") => cmd_fingerprint(&args),
+        Some("user") => cmd_user(&args),
         Some("demo") => {
             let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
             rt.block_on(cmd_demo());
@@ -45,7 +48,7 @@ fn main() {
             std::process::exit(2);
         }
         None => {
-            eprintln!("usage: zoe-cli <init|fingerprint|demo>");
+            eprintln!("usage: zoe-cli <init|fingerprint|user|demo>");
             std::process::exit(2);
         }
     }
@@ -91,6 +94,126 @@ fn cmd_fingerprint(args: &[String]) {
             println!("{}", line.trim());
         }
     }
+}
+
+fn cmd_user(args: &[String]) {
+    let dir = data_dir(args);
+    let sub = args.get(2).map(String::as_str).unwrap_or("");
+    let reg = UserRegistry::open(&dir).expect("open user registry");
+    match sub {
+        "list" => {
+            let users = reg.list().expect("list users");
+            if users.is_empty() {
+                println!("no users in {}", dir.display());
+                return;
+            }
+            let most_recent = reg.most_recent().expect("most recent").map(|u| u.user_id);
+            for u in &users {
+                let active = if most_recent.as_ref() == Some(&u.user_id) {
+                    "*"
+                } else {
+                    " "
+                };
+                let last = u.last_used.unwrap_or(0);
+                println!(
+                    "{active} {}  kind={}  dir={}  last_used={}  id={}",
+                    u.name,
+                    u.kind.as_str(),
+                    u.dir.display(),
+                    last,
+                    hex::encode(u.user_id)
+                );
+            }
+            println!("(*) = activate (daemon default pick; restart to apply)");
+        }
+        "add" => {
+            let name = flag(args, "--name").unwrap_or_else(|| panic!("user add needs --name <NAME>"));
+            let pin = flag(args, "--pin").unwrap_or_else(|| panic!("user add needs --pin <PIN>"));
+            let id = IdentityKeyPair::generate();
+            let user = reg
+                .add_pin_user(&name, &pin, &id.seed())
+                .expect("create user");
+            println!("created user: {} (id={})", user.name, hex::encode(user.user_id));
+            println!("fingerprint: {}", hex::encode(id.fingerprint()));
+            println!("activate: restart daemon with --user {}", hex::encode(user.user_id));
+        }
+        "set-pin" => {
+            let id_hex = flag(args, "--id")
+                .or_else(|| find_user_id(args))
+                .expect("user set-pin needs <USER_ID> or --id");
+            let pin = flag(args, "--pin").expect("user set-pin needs --pin <PIN>");
+            let uid = hex::decode(&id_hex).expect("bad user id");
+            // 升级为 PIN 保护需要当前种子:仅对明文用户可在注册表外读取其 zoe.db;
+            // 对已解锁的 daemon 请走 API `/users/{id}/set-pin`(种子在内存)。
+            let user = reg.get(&uid).expect("user not found");
+            match user.kind {
+                UserKind::Pin => {
+                    // 未持有种子无法重加密 → 引导走 API
+                    eprintln!(
+                        "user '{}' is already PIN-protected; change its PIN via the daemon API \
+                         (POST /api/v1/users/{{id}}/set-pin) while the user is active & unlocked",
+                        user.name
+                    );
+                    std::process::exit(2);
+                }
+                UserKind::Plain => {
+                    // 明文用户:从其数据目录读种子(仅根目录布局支持 CLI 升级)
+                    let storage = zoe_core::storage::ZoeStorage::new(
+                        zoe_core::storage::Db::open(&dir.join("zoe.db")).expect("open zoe.db"),
+                    );
+                    let (seed, _) = storage.identity().expect("read identity").expect("no identity");
+                    reg.set_pin(&user.user_id, &pin, &seed).expect("set pin");
+                    let _ = storage.set_meta("seed_enc", "1");
+                    println!(
+                        "user '{}' upgraded to PIN protection. Restart daemon with --user {} --pin <PIN>",
+                        user.name,
+                        hex::encode(user.user_id)
+                    );
+                }
+            }
+        }
+        "activate" => {
+            let id_hex = flag(args, "--id")
+                .or_else(|| find_user_id(args))
+                .expect("user activate needs <USER_ID> or --id");
+            let uid = hex::decode(&id_hex).expect("bad user id");
+            reg.get(&uid).expect("user not found");
+            reg.set_last_used(&uid).expect("set last_used");
+            println!("user active marker set; restart the daemon to switch users");
+        }
+        other => {
+            eprintln!("usage: zoe-cli user <list|add --name N --pin P|set-pin <ID> --pin P|activate <ID>>");
+            eprintln!("unknown user subcommand: {other}");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// 在散落的位置参数里找一个 64-hex 的用户 ID(跳过 --key 与 --key 的值)。
+fn find_user_id(args: &[String]) -> Option<String> {
+    let mut skip_next = false;
+    for a in args.iter().skip(3) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if a.starts_with("--") {
+            skip_next = true;
+            continue;
+        }
+        if a.len() == 64 && hex::decode(a).is_ok() {
+            return Some(a.clone());
+        }
+    }
+    None
+}
+
+/// 从 args 中取 `--key value` 的值。
+fn flag(args: &[String], key: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == key)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 /// 双节点演示:alice 建群,邀请 bob,双向消息,alice self_update 后再发一条。

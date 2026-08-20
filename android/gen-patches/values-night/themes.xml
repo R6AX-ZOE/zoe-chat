@@ -2,7 +2,8 @@
 <!-- (patch-android-gen.sh 覆盖)夜间窗口:窗口背景与 webui 深色主题一致,
      状态栏/导航栏透明 + 浅色图标。 -->
 <resources>
-    <style name="Theme.zoe_mobile" parent="android:Theme.Material.NoActionBar">
+    <!-- TauriActivity 基于 AppCompat,必须 AppCompat 后代主题;NoActionBar 对齐原模板 -->
+    <style name="Theme.zoe_mobile" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">@color/zoe_window_bg</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>

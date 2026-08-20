@@ -61,7 +61,10 @@ const ZH_CN: Dict = &[
     ("lock.pinLabel", "PIN"),
     ("lock.unlock", "解锁"),
     ("lock.error", "解锁失败"),
-    ("lock.restartHint", "切换用户:在下方列表点击目标用户的切换按钮,daemon 自动重启"),
+    (
+        "lock.restartHint",
+        "切换用户:在下方列表点击目标用户的切换按钮,daemon 自动重启",
+    ),
     ("users.current", "当前用户"),
     ("users.pin", "PIN 保护"),
     ("users.plain", "明文"),
@@ -71,7 +74,10 @@ const ZH_CN: Dict = &[
     ("users.createOk", "已创建;在下方列表点击目标用户切换激活"),
     ("users.switch", "切换到此用户"),
     ("users.switching", "正在切换(守护进程重启)…"),
-    ("users.switchTimeout", "切换未生效,请检查守护进程是否仍在运行"),
+    (
+        "users.switchTimeout",
+        "切换未生效,请检查守护进程是否仍在运行",
+    ),
     ("users.setPin", "更换 PIN"),
     ("users.changePin", "更换"),
     ("users.setPinOk", "PIN 已更新"),

@@ -1049,10 +1049,7 @@ async fn invite(
 // WebSocket 事件流
 // ---------------------------------------------------------------------------
 
-async fn events_ws(
-    State(state): State<SharedState>,
-    ws: WebSocketUpgrade,
-) -> Response {
+async fn events_ws(State(state): State<SharedState>, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |socket| ws_loop(socket, state))
 }
 

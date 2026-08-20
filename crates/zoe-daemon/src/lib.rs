@@ -446,23 +446,15 @@ pub async fn start(config: DaemonConfig) -> Result<Daemon, DaemonError> {
     let listener = if port == 0 {
         TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
-            .map_err(|e| {
-                DaemonError::Bind(SocketAddr::from(([127, 0, 0, 1], 0)), e.to_string())
-            })?
+            .map_err(|e| DaemonError::Bind(SocketAddr::from(([127, 0, 0, 1], 0)), e.to_string()))?
     } else {
         bind_with_retry(port).await.map_err(|e| {
-            DaemonError::Bind(
-                SocketAddr::from(([127, 0, 0, 1], port)),
-                e.to_string(),
-            )
+            DaemonError::Bind(SocketAddr::from(([127, 0, 0, 1], port)), e.to_string())
         })?
     };
     let addr = listener.local_addr()?;
     if !config.mobile {
-        let _ = std::fs::write(
-            config.data_dir.join(PORT_FILE),
-            addr.port().to_string(),
-        );
+        let _ = std::fs::write(config.data_dir.join(PORT_FILE), addr.port().to_string());
     }
     let server = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;

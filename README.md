@@ -73,7 +73,7 @@ cargo run -p zoe-daemon -- --data-dir zoe-data --user <id> --pin 123456   # PIN 
 
 ## 移动端（Android）
 
-完整设计与验收流程见 [docs/tauri-mobile.md](docs/tauri-mobile.md)。CI 产出 release APK（GitHub Actions → `Android Tauri Build` → artifact，Tauri 默认 debug keystore 签名，可侧载）：
+完整设计与验收流程见 [docs/tauri-mobile.md](docs/tauri-mobile.md)。CI 产出 release APK（GitHub Actions → `Android Tauri Build` → artifact；CI 用仓库内 `android/zoe-ci-release.keystore` 开发签名，可直接侧载，覆盖安装签名稳定）：
 
 ```sh
 # 本地构建（需 Android SDK；gen/android 由 CI 生成，本地用 npx tauri android init）

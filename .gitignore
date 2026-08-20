@@ -3,6 +3,7 @@
 /.tmp-tauri
 /identity.json
 /zoe-data
+/data
 *.log
 /webui/node_modules
 /.smoke

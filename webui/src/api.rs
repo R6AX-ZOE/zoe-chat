@@ -158,6 +158,24 @@ pub struct PairStart {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct UserInfo {
+    pub user_id: String,
+    pub name: String,
+    pub kind: String,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub last_used: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UsersResp {
+    pub unlocked: bool,
+    pub active: UserInfo,
+    pub users: Vec<UserInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Settings {
     pub ui_theme: Option<String>,
     pub ui_language: Option<String>,
@@ -248,6 +266,53 @@ pub async fn login(token: &str) -> Result<(), ApiError> {
 
 pub async fn me() -> Result<Me, ApiError> {
     request("GET", "/api/v1/me", None).await
+}
+
+/// 用户注册表:锁定模式下唯一开放的用户态接口(未解锁时 unlocked=false)。
+pub async fn users() -> Result<UsersResp, ApiError> {
+    request("GET", "/api/v1/users", None).await
+}
+
+/// 解锁 PIN 用户。
+pub async fn unlock(pin: &str) -> Result<(), ApiError> {
+    let _: serde_json::Value = request(
+        "POST",
+        "/api/v1/unlock",
+        Some(format!(
+            "{{\"pin\":{}}}",
+            serde_json::to_string(pin).unwrap()
+        )),
+    )
+    .await?;
+    Ok(())
+}
+
+/// 创建新 PIN 用户(本机离线注册;激活需重启 daemon 指定 --user)。
+pub async fn create_user(name: &str, pin: &str) -> Result<UserInfo, ApiError> {
+    request(
+        "POST",
+        "/api/v1/users",
+        Some(format!(
+            "{{\"name\":{},\"pin\":{}}}",
+            serde_json::to_string(name).unwrap(),
+            serde_json::to_string(pin).unwrap()
+        )),
+    )
+    .await
+}
+
+/// 更换当前活跃用户的 PIN(需已解锁)。
+pub async fn set_pin(user_id: &str, pin: &str) -> Result<(), ApiError> {
+    let _: serde_json::Value = request(
+        "POST",
+        &format!("/api/v1/users/{}/set-pin", encode(user_id)),
+        Some(format!(
+            "{{\"pin\":{}}}",
+            serde_json::to_string(pin).unwrap()
+        )),
+    )
+    .await?;
+    Ok(())
 }
 
 pub async fn card() -> Result<Card, ApiError> {

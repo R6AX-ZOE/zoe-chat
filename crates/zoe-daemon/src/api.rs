@@ -80,10 +80,8 @@ async fn auth(State(state): State<SharedState>, req: Request, next: Next) -> Res
 /// 锁定门:未解锁时除用户注册表/解锁外一律 423。
 async fn locked_gate(State(state): State<SharedState>, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
-    let allowed = path == "/users"
-        || path == "/unlock"
-        || path == "/status"
-        || path.starts_with("/users/");
+    let allowed =
+        path == "/users" || path == "/unlock" || path == "/status" || path.starts_with("/users/");
     if state::is_unlocked(&state) || allowed {
         next.run(req).await
     } else {
@@ -528,8 +526,7 @@ async fn create_group(
         let mls = state::mls_identity(&state)
             .ok_or_else(|| ApiError::Internal("locked: mls unavailable".to_string()))?;
         let provider = state.provider.lock().unwrap();
-        let session =
-            MlsSession::create_group(&*provider, &mls, &gid).map_err(internal)?;
+        let session = MlsSession::create_group(&*provider, &mls, &gid).map_err(internal)?;
         let epoch = session.epoch();
         let members = session.members();
         state.sessions.lock().unwrap().insert(gid.to_vec(), session);
@@ -978,7 +975,9 @@ async fn post_settings(
 async fn transports(State(state): State<SharedState>) -> ApiResult {
     // loopback + net(libp2p)常驻;BLE/SIG Mesh 驱动未挂载时如实上报 down
     let net_up = state::net_handle(&state).is_some();
-    let net_peers = state::net_handle(&state).map(|n| n.peers().len()).unwrap_or(0);
+    let net_peers = state::net_handle(&state)
+        .map(|n| n.peers().len())
+        .unwrap_or(0);
     Ok(Json(json!({
         "ble": "down",
         "lan": "down",

@@ -61,6 +61,24 @@ const ZH_CN: Dict = &[
     ("login.token", "访问令牌"),
     ("login.submit", "连接"),
     ("login.error", "令牌无效,请检查后重试"),
+    ("lock.title", "设备已锁定"),
+    ("lock.sub", "输入 PIN 解锁本机身份"),
+    ("lock.pinLabel", "PIN"),
+    ("lock.unlock", "解锁"),
+    ("lock.error", "解锁失败"),
+    ("lock.restartHint", "切换用户需重启守护进程并指定 --user"),
+    ("users.current", "当前用户"),
+    ("users.pin", "PIN 保护"),
+    ("users.plain", "明文"),
+    ("users.newName", "新用户名称"),
+    ("users.newPin", "PIN(至少 4 位)"),
+    ("users.create", "创建用户"),
+    ("users.createOk", "已创建;重启 daemon 并指定 --user 激活"),
+    ("users.setPin", "更换 PIN"),
+    ("users.changePin", "更换"),
+    ("users.setPinOk", "PIN 已更新(重启后生效)"),
+    ("users.pinTooShort", "PIN 至少 4 位"),
+    ("settings.users", "用户"),
     ("nav.chats", "会话"),
     ("nav.settings", "设置"),
     ("nav.contacts", "联系人"),
@@ -226,6 +244,24 @@ const EN_US: Dict = &[
     ("login.token", "Access token"),
     ("login.submit", "Connect"),
     ("login.error", "Invalid token. Please try again."),
+    ("lock.title", "Device locked"),
+    ("lock.sub", "Enter your PIN to unlock this device"),
+    ("lock.pinLabel", "PIN"),
+    ("lock.unlock", "Unlock"),
+    ("lock.error", "Unlock failed"),
+    ("lock.restartHint", "Switch users by restarting the daemon with --user"),
+    ("users.current", "Active"),
+    ("users.pin", "PIN-protected"),
+    ("users.plain", "plain"),
+    ("users.newName", "New user name"),
+    ("users.newPin", "PIN (min 4 chars)"),
+    ("users.create", "Create user"),
+    ("users.createOk", "Created; activate by restarting with --user"),
+    ("users.setPin", "Change PIN"),
+    ("users.changePin", "Change"),
+    ("users.setPinOk", "PIN updated (applies after restart)"),
+    ("users.pinTooShort", "PIN must be at least 4 chars"),
+    ("settings.users", "Users"),
     ("nav.chats", "Chats"),
     ("nav.settings", "Settings"),
     ("nav.contacts", "Contacts"),
@@ -392,7 +428,7 @@ mod tests {
         let zh: std::collections::BTreeSet<&str> = ZH_CN.iter().map(|(k, _)| *k).collect();
         let en: std::collections::BTreeSet<&str> = EN_US.iter().map(|(k, _)| *k).collect();
         assert_eq!(zh, en, "zh-CN 与 en-US 键集合必须一致");
-        assert_eq!(zh.len(), 129, "键数变更时同步本断言与 CI 校验");
+        assert_eq!(zh.len(), 147, "键数变更时同步本断言与 CI 校验");
     }
 
     #[test]

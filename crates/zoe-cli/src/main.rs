@@ -13,7 +13,7 @@ use openmls_rust_crypto::OpenMlsRustCrypto;
 use zoe_core::envelope::{Envelope, FLAG_MULTIPATH, MSG_PRIVATE};
 use zoe_core::identity::IdentityKeyPair;
 use zoe_core::mls::{MlsIdentity, MlsSession, Processed};
-use zoe_core::users::{UserRegistry, UserKind};
+use zoe_core::users::{UserKind, UserRegistry};
 use zoe_transport::loopback::LoopbackHub;
 use zoe_transport::Transport;
 
@@ -127,15 +127,23 @@ fn cmd_user(args: &[String]) {
             println!("(*) = activate (daemon default pick; restart to apply)");
         }
         "add" => {
-            let name = flag(args, "--name").unwrap_or_else(|| panic!("user add needs --name <NAME>"));
+            let name =
+                flag(args, "--name").unwrap_or_else(|| panic!("user add needs --name <NAME>"));
             let pin = flag(args, "--pin").unwrap_or_else(|| panic!("user add needs --pin <PIN>"));
             let id = IdentityKeyPair::generate();
             let user = reg
                 .add_pin_user(&name, &pin, &id.seed())
                 .expect("create user");
-            println!("created user: {} (id={})", user.name, hex::encode(user.user_id));
+            println!(
+                "created user: {} (id={})",
+                user.name,
+                hex::encode(user.user_id)
+            );
             println!("fingerprint: {}", hex::encode(id.fingerprint()));
-            println!("activate: restart daemon with --user {}", hex::encode(user.user_id));
+            println!(
+                "activate: restart daemon with --user {}",
+                hex::encode(user.user_id)
+            );
         }
         "set-pin" => {
             let id_hex = flag(args, "--id")
@@ -161,7 +169,10 @@ fn cmd_user(args: &[String]) {
                     let storage = zoe_core::storage::ZoeStorage::new(
                         zoe_core::storage::Db::open(&dir.join("zoe.db")).expect("open zoe.db"),
                     );
-                    let (seed, _) = storage.identity().expect("read identity").expect("no identity");
+                    let (seed, _) = storage
+                        .identity()
+                        .expect("read identity")
+                        .expect("no identity");
                     reg.set_pin(&user.user_id, &pin, &seed).expect("set pin");
                     let _ = storage.set_meta("seed_enc", "1");
                     println!(

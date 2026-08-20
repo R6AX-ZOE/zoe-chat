@@ -146,8 +146,8 @@ fn resolve_active_user(
     }
 
     // 首次启动:迁移或新建 default(plain,根目录)
-    let root_db = Db::open(&data_dir.join("zoe.db"))
-        .map_err(|e| DaemonError::Storage(e.to_string()))?;
+    let root_db =
+        Db::open(&data_dir.join("zoe.db")).map_err(|e| DaemonError::Storage(e.to_string()))?;
     let storage = ZoeStorage::new(root_db);
     let (seed, created_at) = match storage
         .identity()
@@ -275,9 +275,7 @@ fn init_identity_runtime(state: &SharedState, seed: &[u8; 32]) -> Result<(), Dae
 pub fn unlock(state: &SharedState, pin: &str) -> Result<User, DaemonError> {
     let user = state.active_user.lock().unwrap().clone();
     if user.kind != UserKind::Pin {
-        return Err(DaemonError::NotPinProtected(
-            hex::encode(user.user_id),
-        ));
+        return Err(DaemonError::NotPinProtected(hex::encode(user.user_id)));
     }
     if !state
         .registry
@@ -316,16 +314,15 @@ pub fn unlock(state: &SharedState, pin: &str) -> Result<User, DaemonError> {
 pub async fn start(config: DaemonConfig) -> Result<Daemon, DaemonError> {
     std::fs::create_dir_all(&config.data_dir)?;
 
-    let registry = UserRegistry::open(&config.data_dir)
-        .map_err(|e| DaemonError::Registry(e.to_string()))?;
+    let registry =
+        UserRegistry::open(&config.data_dir).map_err(|e| DaemonError::Registry(e.to_string()))?;
     let active_user = resolve_active_user(&registry, &config, &config.data_dir)?;
     registry
         .set_last_used(&active_user.user_id)
         .map_err(|e| DaemonError::Registry(e.to_string()))?;
 
     let user_dir = active_user.data_path(&config.data_dir);
-    let db = Db::open(&user_dir.join("zoe.db"))
-        .map_err(|e| DaemonError::Storage(e.to_string()))?;
+    let db = Db::open(&user_dir.join("zoe.db")).map_err(|e| DaemonError::Storage(e.to_string()))?;
     let storage = ZoeStorage::new(db);
     let provider = ZoeProvider::new(&user_dir.join("mls.db"))
         .map_err(|e| DaemonError::Storage(e.to_string()))?;

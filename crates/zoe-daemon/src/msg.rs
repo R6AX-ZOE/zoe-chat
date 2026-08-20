@@ -193,7 +193,9 @@ fn sessions_epoch(state: &SharedState, gid: &[u8]) -> u64 {
 
 /// 按会话类型投递信封:私聊定向发给 direct_peer,群聊广播全部已连接 peer。
 pub async fn deliver_envelope(state: &SharedState, env: &Envelope) {
-    let Some(net) = state::net_handle(state) else { return };
+    let Some(net) = state::net_handle(state) else {
+        return;
+    };
     let direct_peer = state
         .storage
         .group(&env.group_id)
@@ -239,8 +241,7 @@ pub async fn invite_peer(
     group_id: &[u8],
     addr: &str,
 ) -> Result<serde_json::Value, String> {
-    let net = state::net_handle(state)
-        .ok_or_else(|| "net transport not available".to_string())?;
+    let net = state::net_handle(state).ok_or_else(|| "net transport not available".to_string())?;
 
     // 解析目标 peer id
     let peer = peer_id_from_addr(addr)
@@ -353,8 +354,7 @@ pub async fn start_direct(
     peer_id_hex: &str,
     addr: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    let net = state::net_handle(state)
-        .ok_or_else(|| "net transport not available".to_string())?;
+    let net = state::net_handle(state).ok_or_else(|| "net transport not available".to_string())?;
     let pid = hex::decode(peer_id_hex).map_err(|_| "bad peer id".to_string())?;
 
     // 联系人必须在册且未被阻止

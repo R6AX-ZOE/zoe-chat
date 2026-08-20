@@ -161,8 +161,10 @@ impl UserRegistry {
         let mut out = Vec::new();
         for row in rows {
             let (id, name, kind, dir, _seed_enc, _verifier, created, last_used) = row?;
-            let user_id: [u8; 32] =
-                id.clone().try_into().map_err(|_| RegistryError::BadSeed(id.len()))?;
+            let user_id: [u8; 32] = id
+                .clone()
+                .try_into()
+                .map_err(|_| RegistryError::BadSeed(id.len()))?;
             let kind = UserKind::from_str(&kind).ok_or_else(|| {
                 RegistryError::NotFound(format!("unknown kind {kind} for user {name}"))
             })?;
@@ -188,12 +190,16 @@ impl UserRegistry {
 
     /// 最近使用用户(v1 默认选中)。
     pub fn most_recent(&self) -> Result<Option<User>, RegistryError> {
-        Ok(self.list()?.into_iter().max_by_key(|u| u.last_used).or_else(|| {
-            // 无 last_used 记录时退回最先创建者(迁移场景)
-            self.list()
-                .ok()
-                .and_then(|all| all.into_iter().min_by_key(|u| u.created_at))
-        }))
+        Ok(self
+            .list()?
+            .into_iter()
+            .max_by_key(|u| u.last_used)
+            .or_else(|| {
+                // 无 last_used 记录时退回最先创建者(迁移场景)
+                self.list()
+                    .ok()
+                    .and_then(|all| all.into_iter().min_by_key(|u| u.created_at))
+            }))
     }
 
     pub fn set_last_used(&self, user_id: &[u8]) -> Result<(), RegistryError> {
@@ -207,69 +213,69 @@ impl UserRegistry {
 
     // --- 创建 ---
 
-/// 创建 PIN 保护用户:独立数据目录 + 加密种子 + argon2id 校验串。
-/// 返回新用户。
-pub fn add_pin_user(
-    &self,
-    name: &str,
-    pin: &str,
-    seed: &[u8; 32],
-) -> Result<User, RegistryError> {
-    validate_pin(pin)?;
-    if name.trim().is_empty() || name.len() > 64 {
-        return Err(RegistryError::BadPin); // 复用:非法名称同样拒绝
+    /// 创建 PIN 保护用户:独立数据目录 + 加密种子 + argon2id 校验串。
+    /// 返回新用户。
+    pub fn add_pin_user(
+        &self,
+        name: &str,
+        pin: &str,
+        seed: &[u8; 32],
+    ) -> Result<User, RegistryError> {
+        validate_pin(pin)?;
+        if name.trim().is_empty() || name.len() > 64 {
+            return Err(RegistryError::BadPin); // 复用:非法名称同样拒绝
+        }
+
+        let mut user_id = [0u8; 32];
+        OsRng.fill_bytes(&mut user_id);
+        let dir = PathBuf::from(format!("users/{}", hex::encode(user_id)));
+        let user_dir = self.data_dir.join(&dir);
+        std::fs::create_dir_all(&user_dir)?;
+
+        // 密码学:派生密钥加密种子 + 生成 PIN 校验串
+        let mut salt = [0u8; SEED_ENC_SALT_LEN];
+        OsRng.fill_bytes(&mut salt);
+        let seed_enc = encrypt_seed(seed, pin, &salt)?;
+        let verifier = pin_verifier(pin)?;
+
+        // 初始化用户 zoe.db(空身份表;身份只以加密形态在注册表)与 mls.db
+        let db = Db::open(&user_dir.join("zoe.db"))?;
+        let storage = ZoeStorage::new(db);
+        storage.set_meta("seed_enc", "1")?;
+        storage.set_meta("user_id", &hex::encode(user_id))?;
+        let _ = crate::storage::ZoeProvider::new(&user_dir.join("mls.db"))?;
+
+        self.insert(
+            &user_id,
+            name,
+            UserKind::Pin,
+            &dir,
+            Some(seed_enc),
+            Some(verifier),
+            now_i64(),
+        )
     }
 
-    let mut user_id = [0u8; 32];
-    OsRng.fill_bytes(&mut user_id);
-    let dir = PathBuf::from(format!("users/{}", hex::encode(user_id)));
-    let user_dir = self.data_dir.join(&dir);
-    std::fs::create_dir_all(&user_dir)?;
-
-    // 密码学:派生密钥加密种子 + 生成 PIN 校验串
-    let mut salt = [0u8; SEED_ENC_SALT_LEN];
-    OsRng.fill_bytes(&mut salt);
-    let seed_enc = encrypt_seed(seed, pin, &salt)?;
-    let verifier = pin_verifier(pin)?;
-
-    // 初始化用户 zoe.db(空身份表;身份只以加密形态在注册表)与 mls.db
-    let db = Db::open(&user_dir.join("zoe.db"))?;
-    let storage = ZoeStorage::new(db);
-    storage.set_meta("seed_enc", "1")?;
-    storage.set_meta("user_id", &hex::encode(user_id))?;
-    let _ = crate::storage::ZoeProvider::new(&user_dir.join("mls.db"))?;
-
-    self.insert(
-        &user_id,
-        name,
-        UserKind::Pin,
-        &dir,
-        Some(seed_enc),
-        Some(verifier),
-        now_i64(),
-    )
-}
-
-/// 创建明文用户(旧版布局,数据在 data_dir 根;种子由调用方负责写入
-/// 该用户 zoe.db 的 identity 表 —— 本方法只登记)。
-pub fn add_plain_user(&self, name: &str, created_at: i64) -> Result<User, RegistryError> {
-    if name.trim().is_empty() || name.len() > 64 {
-        return Err(RegistryError::BadPin);
+    /// 创建明文用户(旧版布局,数据在 data_dir 根;种子由调用方负责写入
+    /// 该用户 zoe.db 的 identity 表 —— 本方法只登记)。
+    pub fn add_plain_user(&self, name: &str, created_at: i64) -> Result<User, RegistryError> {
+        if name.trim().is_empty() || name.len() > 64 {
+            return Err(RegistryError::BadPin);
+        }
+        let mut user_id = [0u8; 32];
+        OsRng.fill_bytes(&mut user_id);
+        self.insert(
+            &user_id,
+            name,
+            UserKind::Plain,
+            &PathBuf::new(),
+            None,
+            None,
+            created_at,
+        )
     }
-    let mut user_id = [0u8; 32];
-    OsRng.fill_bytes(&mut user_id);
-    self.insert(
-        &user_id,
-        name,
-        UserKind::Plain,
-        &PathBuf::new(),
-        None,
-        None,
-        created_at,
-    )
-}
 
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn insert(
         &self,
         user_id: &[u8; 32],
@@ -339,14 +345,18 @@ pub fn add_plain_user(&self, name: &str, created_at: i64) -> Result<User, Regist
         let Some(blob) = seed_enc else {
             return Err(RegistryError::NotFound(hex::encode(user_id)));
         };
-        crate::storage::decrypt_seed(&blob, pin).map_err(|_| {
-            RegistryError::BadPinHash(hex::encode(user_id))
-        })
+        crate::storage::decrypt_seed(&blob, pin)
+            .map_err(|_| RegistryError::BadPinHash(hex::encode(user_id)))
     }
 
     /// 升级为 PIN 保护(或将 PIN 更换为新值):重新加密种子并换校验串。
     /// 要求调用方持有当前身份的种子(即已解锁)。返回新的 pin_verifier。
-    pub fn set_pin(&self, user_id: &[u8], new_pin: &str, seed: &[u8; 32]) -> Result<(), RegistryError> {
+    pub fn set_pin(
+        &self,
+        user_id: &[u8],
+        new_pin: &str,
+        seed: &[u8; 32],
+    ) -> Result<(), RegistryError> {
         validate_pin(new_pin)?;
         let mut salt = [0u8; SEED_ENC_SALT_LEN];
         OsRng.fill_bytes(&mut salt);

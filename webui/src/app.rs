@@ -37,7 +37,11 @@ struct Ctx {
     has_older: RwSignal<bool>,
     mnemonic: RwSignal<Option<String>>,
     logged_in: RwSignal<bool>,
-    /// 发起单聊对话框(联系人 → 新私聊,可带可选地址)。
+    /// 锁定模式:活跃用户为 PIN 保护且未解锁(423 门禁;仅 /users /unlock 开放)。
+    locked: RwSignal<bool>,
+    /// 用户注册表快照(锁定屏与设置页共用)。
+    users: RwSignal<Option<api::UsersResp>>,
+    /// 直接对讲对话框(扫码 + 新私聊)。
     direct_dialog: RwSignal<Option<DirectDialog>>,
 }
 
@@ -82,6 +86,35 @@ impl Ctx {
             if let Ok(gs) = api::groups().await {
                 ctx.groups.set(gs);
             }
+        });
+    }
+
+    /// 登录成功后的共同初始化:拉注册表判断锁定,未锁定再拉会话数据 + 挂事件流。
+    fn finish_login(&self) {
+        let ctx = *self;
+        spawn_local(async move {
+            let u = api::users().await.ok();
+            ctx.users.set(u.clone());
+            let unlocked = u.map(|x| x.unlocked).unwrap_or(false);
+            ctx.locked.set(!unlocked);
+            if !unlocked {
+                return;
+            }
+            ctx.me.set(api::me().await.ok());
+            ctx.card.set(api::card().await.ok());
+            ctx.transports.set(api::transports().await.ok());
+            ctx.refresh_groups();
+            ctx.refresh_peers();
+            api::connect_events(Box::new(move |ev| {
+                let ctx = ctx;
+                match ev["type"].as_str() {
+                    Some("message") => ctx.refresh_messages(),
+                    Some("group") => ctx.refresh_groups(),
+                    Some("transport") => ctx.refresh_transports(),
+                    Some("peer") => ctx.refresh_peers(),
+                    _ => {}
+                }
+            }));
         });
     }
 
@@ -285,6 +318,8 @@ pub fn App() -> impl IntoView {
         has_older: RwSignal::new(false),
         mnemonic: RwSignal::new(None),
         logged_in: RwSignal::new(false),
+        locked: RwSignal::new(false),
+        users: RwSignal::new(None),
         direct_dialog: RwSignal::new(None),
     };
     provide_context(ctx);
@@ -339,22 +374,7 @@ pub fn App() -> impl IntoView {
                 return;
             }
             ctx.logged_in.set(true);
-            ctx.me.set(api::me().await.ok());
-            ctx.card.set(api::card().await.ok());
-            ctx.transports.set(api::transports().await.ok());
-            ctx.refresh_groups();
-            ctx.refresh_peers();
-            // WS 事件流(自动重连)
-            api::connect_events(Box::new(move |ev| {
-                let ctx = ctx;
-                match ev["type"].as_str() {
-                    Some("message") => ctx.refresh_messages(),
-                    Some("group") => ctx.refresh_groups(),
-                    Some("transport") => ctx.refresh_transports(),
-                    Some("peer") => ctx.refresh_peers(),
-                    _ => {}
-                }
-            }));
+            ctx.finish_login();
         });
     };
 
@@ -363,10 +383,17 @@ pub fn App() -> impl IntoView {
     view! {
         <main>
             <Show
-                when=move || !ctx.logged_in.get()
-                fallback=move || view! { <AppShell ctx=ctx /> }
+                when=move || ctx.locked.get()
+                fallback=move || view! {
+                    <Show
+                        when=move || !ctx.logged_in.get()
+                        fallback=move || view! { <AppShell ctx=ctx /> }
+                    >
+                        <LoginView ctx=ctx />
+                    </Show>
+                }
             >
-                <LoginView ctx=ctx />
+                <LockView ctx=ctx />
             </Show>
         </main>
     }
@@ -393,22 +420,8 @@ fn LoginView(ctx: Ctx) -> impl IntoView {
             match api::login(&t).await {
                 Ok(()) => {
                     api::set_token(&t);
-                    ctx.me.set(api::me().await.ok());
-                    ctx.card.set(api::card().await.ok());
-                    ctx.transports.set(api::transports().await.ok());
-                    ctx.refresh_groups();
-                    ctx.refresh_peers();
                     ctx.logged_in.set(true);
-                    api::connect_events(Box::new(move |ev| {
-                        let ctx = ctx;
-                        match ev["type"].as_str() {
-                            Some("message") => ctx.refresh_messages(),
-                            Some("group") => ctx.refresh_groups(),
-                            Some("transport") => ctx.refresh_transports(),
-                            Some("peer") => ctx.refresh_peers(),
-                            _ => {}
-                        }
-                    }));
+                    ctx.finish_login();
                 }
                 Err(_) => error.set(ctx.t("login.error")),
             }
@@ -440,6 +453,88 @@ fn LoginView(ctx: Ctx) -> impl IntoView {
                     {move || ctx.t("login.submit")}
                 </button>
                 <div class="error">{move || error.get()}</div>
+            </div>
+        </div>
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 锁定屏(活跃用户 PIN 保护且未解锁;423 门禁期间唯一主界面)
+// ---------------------------------------------------------------------------
+
+#[component]
+fn LockView(ctx: Ctx) -> impl IntoView {
+    let pin_input = RwSignal::new(String::new());
+    let error = RwSignal::new(String::new());
+    let busy = RwSignal::new(false);
+
+    let do_unlock = move || {
+        let pin_input = pin_input;
+        let error = error;
+        let busy = busy;
+        let ctx = ctx;
+        spawn_local(async move {
+            let pin = pin_input.get().trim().to_string();
+            if pin.is_empty() || busy.get() {
+                return;
+            }
+            busy.set(true);
+            match api::unlock(&pin).await {
+                Ok(()) => {
+                    ctx.locked.set(false);
+                    ctx.finish_login();
+                }
+                Err(e) => error.set(ctx.t("lock.error") + &format!(" ({e})")),
+            }
+            busy.set(false);
+        });
+    };
+
+    let active = move || {
+        ctx.users
+            .get()
+            .map(|u| (u.active.name.clone(), u.active.kind.clone()))
+    };
+
+    view! {
+        <div class="login">
+            <div class="login-card">
+                <div class="logo"><IconView icon=Icon::Lock size=40 /></div>
+                <h1>{move || ctx.t("lock.title")}</h1>
+                <p class="sub">{move || ctx.t("lock.sub")}</p>
+                {move || {
+                    let a = active();
+                    match a {
+                        Some((name, kind)) => view! {
+                            <div class="kv">
+                                <span class="k">{move || ctx.t("users.current")}</span>
+                                <span class="v">{format!("{name} · {kind}")}</span>
+                            </div>
+                        }.into_any(),
+                        None => ().into_any(),
+                    }
+                }}
+                <div class="field">
+                    <label for="pin-input">{move || ctx.t("lock.pinLabel")}</label>
+                    <input
+                        id="pin-input"
+                        type="password"
+                        inputmode="numeric"
+                        autocomplete="off"
+                        spellcheck="false"
+                        prop:value=move || pin_input.get()
+                        on:input=move |ev| pin_input.set(event_target_value(&ev))
+                        on:keydown=move |ev| {
+                            if ev.key() == "Enter" { do_unlock(); }
+                        }
+                    />
+                </div>
+                <button class="primary" disabled=move || busy.get() on:click=move |_| do_unlock()>
+                    <IconView icon=Icon::Shield size=18 />
+                    {move || ctx.t("lock.unlock")}
+                </button>
+                <div class="error">{move || error.get()}</div>
+                <p class="note" style="margin-top:12px">{move || ctx.t("lock.restartHint")}</p>
             </div>
         </div>
     }
@@ -1344,6 +1439,10 @@ fn SettingsView(ctx: Ctx) -> impl IntoView {
             </div>
         </div>
         <div class="panel-section">
+            <h3>{move || ctx.t("settings.users")}</h3>
+            <UsersPanel ctx=ctx />
+        </div>
+        <div class="panel-section">
             <h3>{move || ctx.t("settings.pairing")}</h3>
             <p class="note" style="margin-bottom:8px">{move || ctx.t("pair.desc")}</p>
             {move || {
@@ -1498,6 +1597,156 @@ fn SettingsView(ctx: Ctx) -> impl IntoView {
                     }.into_any()
                 }).collect::<Vec<AnyView>>()
             }}
+        </div>
+    }
+}
+
+#[component]
+fn UsersPanel(ctx: Ctx) -> impl IntoView {
+    let new_name = RwSignal::new(String::new());
+    let new_pin = RwSignal::new(String::new());
+    let new_msg = RwSignal::new(String::new());
+    let new_ok = RwSignal::new(false);
+    let chg_pin = RwSignal::new(String::new());
+    let chg_msg = RwSignal::new(String::new());
+    let chg_ok = RwSignal::new(false);
+
+    let refresh = move || {
+        let ctx = ctx;
+        spawn_local(async move {
+            if let Ok(u) = api::users().await {
+                ctx.users.set(Some(u));
+            }
+        });
+    };
+
+    let do_create = move || {
+        let ctx = ctx;
+        let new_name = new_name;
+        let new_pin = new_pin;
+        let new_msg = new_msg;
+        let new_ok = new_ok;
+        let refresh = refresh;
+        spawn_local(async move {
+            let name = new_name.get().trim().to_string();
+            let pin = new_pin.get().trim().to_string();
+            if name.is_empty() || pin.len() < 4 {
+                new_msg.set(ctx.t("users.pinTooShort"));
+                new_ok.set(false);
+                return;
+            }
+            match api::create_user(&name, &pin).await {
+                Ok(_) => {
+                    new_name.set(String::new());
+                    new_pin.set(String::new());
+                    new_msg.set(ctx.t("users.createOk"));
+                    new_ok.set(true);
+                    refresh();
+                }
+                Err(e) => {
+                    new_msg.set(ctx.t("common.failed") + &format!(" ({e})"));
+                    new_ok.set(false);
+                }
+            }
+        });
+    };
+
+    let do_set_pin = move || {
+        let ctx = ctx;
+        let chg_pin = chg_pin;
+        let chg_msg = chg_msg;
+        let chg_ok = chg_ok;
+        spawn_local(async move {
+            let pin = chg_pin.get().trim().to_string();
+            if pin.len() < 4 {
+                chg_msg.set(ctx.t("users.pinTooShort"));
+                chg_ok.set(false);
+                return;
+            }
+            let uid = ctx
+                .users
+                .get()
+                .map(|u| u.active.user_id.clone())
+                .unwrap_or_default();
+            if uid.is_empty() {
+                chg_msg.set(ctx.t("common.failed"));
+                chg_ok.set(false);
+                return;
+            }
+            match api::set_pin(&uid, &pin).await {
+                Ok(()) => {
+                    chg_pin.set(String::new());
+                    chg_msg.set(ctx.t("users.setPinOk"));
+                    chg_ok.set(true);
+                    refresh();
+                }
+                Err(e) => {
+                    chg_msg.set(ctx.t("common.failed") + &format!(" ({e})"));
+                    chg_ok.set(false);
+                }
+            }
+        });
+    };
+
+    view! {
+        <div>
+            {move || {
+                let Some(u) = ctx.users.get() else {
+                    return vec![view! { <div class="note">{move || ctx.t("devices.none")}</div> }.into_any()];
+                };
+                let active_id = u.active.user_id.clone();
+                u.users.into_iter().map(move |x| {
+                    let xid = x.user_id.clone();
+                    let is_active = xid == active_id;
+                    let kind_label = ctx.t(if x.kind == "pin" { "users.pin" } else { "users.plain" });
+                    let shorted = short(&xid);
+                    view! {
+                        <div class="list-row" class:muted=move || !is_active>
+                            <span class="lr-main">
+                                <span class="lr-name">
+                                    <IconView icon=Icon::Key size=14 />
+                                    {x.name.clone()}
+                                    {if is_active { format!(" · {}", ctx.t("users.current")) } else { String::new() }}
+                                </span>
+                                <span class="lr-sub">{format!("{kind_label} · {shorted}")}</span>
+                            </span>
+                        </div>
+                    }.into_any()
+                }).collect::<Vec<AnyView>>()
+            }}
+            <p class="note" style="margin-top:8px">{move || ctx.t("lock.restartHint")}</p>
+            <div class="row" style="margin-top:8px">
+                <input
+                    type="text"
+                    spellcheck="false"
+                    style="flex:1"
+                    placeholder={move || ctx.t("users.newName")}
+                    prop:value=move || new_name.get()
+                    on:input=move |ev| new_name.set(event_target_value(&ev))
+                />
+                <input
+                    type="password"
+                    inputmode="numeric"
+                    style="flex:1"
+                    placeholder={move || ctx.t("users.newPin")}
+                    prop:value=move || new_pin.get()
+                    on:input=move |ev| new_pin.set(event_target_value(&ev))
+                />
+                <button on:click=move |_| do_create()>{move || ctx.t("users.create")}</button>
+            </div>
+            <div class="note" style:color=move || if new_ok.get() { "var(--ok)" } else { "var(--danger)" }>{move || new_msg.get()}</div>
+            <div class="row" style="margin-top:8px">
+                <input
+                    type="password"
+                    inputmode="numeric"
+                    style="flex:1"
+                    placeholder={move || ctx.t("users.setPin")}
+                    prop:value=move || chg_pin.get()
+                    on:input=move |ev| chg_pin.set(event_target_value(&ev))
+                />
+                <button on:click=move |_| do_set_pin()>{move || ctx.t("users.changePin")}</button>
+            </div>
+            <div class="note" style:color=move || if chg_ok.get() { "var(--ok)" } else { "var(--danger)" }>{move || chg_msg.get()}</div>
         </div>
     }
 }

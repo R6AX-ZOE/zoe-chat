@@ -78,7 +78,7 @@ cargo run -p zoe-daemon -- --data-dir zoe-data --user <id> --pin 123456   # PIN 
 ```sh
 # 本地构建（需 Android SDK；gen/android 由 CI 生成，本地用 npx tauri android init）
 cd app
-npx tauri android build --apk --release
+npx tauri android build --apk   # 默认即 release 构建（tauri 无 --release 参数，仅 --debug 可切回 debug）
 ```
 
 ## BLE 真机联调（Termux）

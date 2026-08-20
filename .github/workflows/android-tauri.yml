@@ -111,8 +111,8 @@ jobs:
         working-directory: app
         run: |
           set -o pipefail
-          # release 构建(体积小;Tauri 默认以 debug keystore 签发,可侧载,无需单独签名配置)
-          cargo tauri android build --apk --release 2>&1 | tee /tmp/build.log
+          # release 构建(默认 profile 即 release,无需 --release;Tauri 默认以 debug keystore 签发,可侧载,无需单独签名配置)
+          cargo tauri android build --apk 2>&1 | tee /tmp/build.log
 
       - name: Verify APK
         run: |

@@ -369,7 +369,7 @@ crates/zoe-cli/src/ble.rs            # 小改:--send-env 与收包重组打印(�
 - **结果回传**：GitHub API 在沙箱不可达，CI 把结果（job 状态 + badging + sha256 + 失败时构建日志尾部）
   提交到 **`ci/report`** 分支（force push），本地 `git fetch origin ci/report` 即可验收；
   artifact 名 `zoe-mobile-apk`（Actions 页下载）。
-- cargo 命令**均不用 `--locked`**（沿用坑 6）；CI 以 `--apk --release` 出通用 APK（Tauri 默认 debug keystore 签名，可侧载；正式签名另配 keystore 后再启用）。
+- cargo 命令**均不用 `--locked`**（沿用坑 6）；CI 以 `--apk` 出通用 release APK（tauri 默认即 release 构建，无 `--release` 参数；Tauri 默认 debug keystore 签名，可侧载，正式签名另配 keystore 后再启用）。
 
 ## 关键坑（实测结论，勿重走）
 

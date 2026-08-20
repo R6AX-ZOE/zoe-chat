@@ -40,13 +40,18 @@ cp -v "$MAIN_SRC" "$MAIN_DST"
 cp -v "$MANIFEST_SRC" "$MANIFEST_DST"
 
 # --- release 签名注入 ---
+# 注:不能 `apply(from = "xx.gradle.kts")` 独立脚本——Kotlin DSL 跨脚本 apply 无 android{} 访问器
+# (报 Unresolved reference: android)。直接追加到 app/build.gradle.kts 末尾(同文件作用域,访问器可用),
+# 在模板 buildTypes 之后执行,赋值晚于模板默认,最终生效。
 GEN_APP="app/src-tauri/gen/android/app"
 BUILD_GRADLE="$GEN_APP/build.gradle.kts"
 cp -v "android/zoe-ci-release.keystore" "$GEN_APP/zoe-ci-release.keystore"
 
-cat > "$GEN_APP/release-signing.gradle.kts" <<'EOF'
-// CI 开发签名(android/zoe-ci-release.keystore,见 patch-android-gen.sh 头注)。
-// 仅开发/侧载;发布正式版由发布者配置自有 keystore 替换本文件。
+if ! grep -q 'zoe-ci-release.keystore' "$BUILD_GRADLE"; then
+  cat >> "$BUILD_GRADLE" <<'EOF'
+
+// (patch-android-gen.sh 注入)release 签名:CI 开发 keystore(android/zoe-ci-release.keystore,
+// 非生产密钥;正式发布由发布者另配 keystore 替换本块)。
 android {
   signingConfigs {
     create("release") {
@@ -64,13 +69,6 @@ android {
   }
 }
 EOF
-
-if ! grep -q 'release-signing.gradle.kts' "$BUILD_GRADLE"; then
-  cat >> "$BUILD_GRADLE" <<'EOF'
-
-// (patch-android-gen.sh 注入)release 签名
-apply(from = "release-signing.gradle.kts")
-EOF
 fi
-grep -q 'release-signing.gradle.kts' "$BUILD_GRADLE"
+grep -q 'zoe-ci-release.keystore' "$BUILD_GRADLE"
 echo "patched: MainActivity.kt / AndroidManifest.xml / release signing"

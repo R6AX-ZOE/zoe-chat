@@ -33,7 +33,7 @@
 | POST | `/api/v1/devices/:id/revoke` | 吊销设备 |
 | GET | `/api/v1/backup/mnemonic` | 生成助记词(需口令确认:`{password}`) |
 | POST | `/api/v1/restore` | 助记词恢复:`{mnemonic, password}` |
-| GET | `/api/v1/transports` | 各传输状态:ble/lan/net 是否可用、邻居数(`net_peers`)、打洞状态。**移动端语义(2026-08-20)**:`loopback` 恒 up;`ble` = 宿主应用(回环桥)已连接(`AppState.ble_up`,开机自动 `start_bridge`),`lan`/`net`/`sigmesh` 移动端未挂载特征/驱动,如实 down |
+| GET | `/api/v1/transports` | 各传输状态:ble/lan/net 是否可用、邻居数(`net_peers`)、打洞状态。**移动端语义(2026-08-20)**:`loopback` 恒 up;`ble` = 宿主应用(回环桥)已连接(`AppState.ble_up`,开机自动 `start_bridge`),`lan`/`net`/`sigmesh` 移动端未挂载特征/驱动,如实 down。`platform` = `mobile`/`desktop`,移动端 UI 据此隐藏桌面专属传输(2026-08-21) |
 | POST | `/api/v1/system/restart` | 重启服务(宿主进程冷启动)。走**锁定门之外**(锁定态下也可用,不改变锁定态)。移动端 = 重建 MainActivity 冷启动(重启后 PIN 用户进入锁定屏→首页即锁定屏);桌面无宿主钩子 → 404 |
 | POST | `/api/v1/settings` | 设置:明文缓存保留期、自建中继地址、自动启动、`ui_language` |
 

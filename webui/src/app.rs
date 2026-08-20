@@ -63,9 +63,7 @@ impl Ctx {
         unlocked
             && !u.as_ref().map(|x| x.can_switch).unwrap_or(false)
             && u.as_ref()
-                .map(|x| {
-                    x.active.kind == "plain" && x.users.iter().all(|y| y.kind != "pin")
-                })
+                .map(|x| x.active.kind == "plain" && x.users.iter().all(|y| y.kind != "pin"))
                 .unwrap_or(false)
     }
 
@@ -867,11 +865,23 @@ fn save_theme_lang(ctx: Ctx) {
 }
 
 /// 重启服务/应用(Android 冷启动 → 锁定屏;桌面无宿主钩子,报错提示)。
+/// 注意:Android 上冷启动会立即杀死进程,HTTP 响应永远到不了前端,
+/// fetch 抛 "TypeError: Failed to fetch" —— 此时重启其实已触发,按成功处理。
 fn do_restart(ctx: Ctx) {
     spawn_local(async move {
         match api::system_restart().await {
             Ok(()) => {}
-            Err(e) => alert(&(ctx.t("system.restartErr") + &format!(" ({e})"))),
+            Err(e) => {
+                let s = e.to_string();
+                if s.contains("Failed to fetch")
+                    || s.contains("NetworkError")
+                    || s.contains("load failed")
+                {
+                    alert(&ctx.t("system.restarting"));
+                } else {
+                    alert(&(ctx.t("system.restartErr") + &format!(" ({s})")));
+                }
+            }
         }
     });
 }
@@ -897,13 +907,28 @@ fn transport_up(ts: &Option<api::TransportStatus>, key: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// 当前应展示的传输列表:移动端只挂载 ble + loopback,LAN/net/sigmesh
+/// 为桌面专属(如实 down,但 UI 上隐藏而非显示"故障")。
+fn transport_items(ts: &Option<api::TransportStatus>) -> Vec<(&'static str, &'static str)> {
+    let mobile = ts.as_ref().map(|t| t.platform == "mobile").unwrap_or(false);
+    if mobile {
+        TRANSPORT_ITEMS
+            .iter()
+            .filter(|(k, _)| *k == "ble" || *k == "loopback")
+            .copied()
+            .collect()
+    } else {
+        TRANSPORT_ITEMS.to_vec()
+    }
+}
+
 #[component]
 fn TransportDots(ctx: Ctx) -> impl IntoView {
     view! {
         <span class="transport-dots">
             {move || {
                 let ts = ctx.transports.get();
-                TRANSPORT_ITEMS.iter().map(move |(label, key)| {
+                transport_items(&ts).into_iter().map(move |(label, key)| {
                     let up = transport_up(&ts, key);
                     view! {
                         <span
@@ -1686,9 +1711,8 @@ fn SettingsView(ctx: Ctx) -> impl IntoView {
             <h3>{move || ctx.t("settings.transports")}</h3>
             {move || {
                 let ts = ctx.transports.get();
-                TRANSPORT_ITEMS.iter().map(move |(key, label)| {
+                transport_items(&ts).into_iter().map(move |(key, label)| {
                     let up = transport_up(&ts, key);
-                    let label = *label;
                     view! {
                         <div class="kv">
                             <span class="k">{move || ctx.t(label)}</span>
@@ -1698,6 +1722,12 @@ fn SettingsView(ctx: Ctx) -> impl IntoView {
                         </div>
                     }.into_any()
                 }).collect::<Vec<AnyView>>()
+            }}
+            {move || {
+                let mobile = ctx.transports.get().map(|t| t.platform == "mobile").unwrap_or(false);
+                mobile.then(|| view! {
+                    <p class="note" style="margin-top:8px">{ctx.t("transport.mobileNote")}</p>
+                })
             }}
         </div>
         <div class="panel-section">

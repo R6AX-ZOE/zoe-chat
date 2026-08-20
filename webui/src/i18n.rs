@@ -83,7 +83,10 @@ const ZH_CN: Dict = &[
     ("users.setPinOk", "PIN 已更新"),
     ("users.pinTooShort", "PIN 至少 4 位"),
     ("onboard.title", "设置设备 PIN"),
-    ("onboard.sub", "为本机设置 PIN 码:下次打开应用需先解锁,保护本地身份与消息数据"),
+    (
+        "onboard.sub",
+        "为本机设置 PIN 码:下次打开应用需先解锁,保护本地身份与消息数据",
+    ),
     ("onboard.pin", "PIN(至少 4 位)"),
     ("onboard.confirm", "确认 PIN"),
     ("onboard.mismatch", "两次输入不一致"),
@@ -103,6 +106,7 @@ const ZH_CN: Dict = &[
         "守护进程或桥接异常时点击重启:在手机上会冷启动应用,重启后需 PIN 解锁",
     ),
     ("system.restartErr", "重启失败"),
+    ("system.restarting", "重启已触发,应用即将关闭并进入锁定屏…"),
     ("settings.users", "用户"),
     ("nav.chats", "会话"),
     ("nav.settings", "设置"),
@@ -187,6 +191,10 @@ const ZH_CN: Dict = &[
     ("transport.sigmesh", "SIG Mesh"),
     ("transport.up", "可用"),
     ("transport.down", "不可用"),
+    (
+        "transport.mobileNote",
+        "移动端仅支持蓝牙近场与本地回环;局域网 / 互联网打洞 / SIG Mesh 为桌面端功能",
+    ),
     ("common.back", "返回"),
     ("common.close", "关闭"),
     ("common.save", "保存"),
@@ -308,6 +316,7 @@ const EN_US: Dict = &[
         "If the daemon or bridge is stuck, restart the service: on the phone this cold-restarts the app and the PIN lock screen appears.",
     ),
     ("system.restartErr", "Restart failed"),
+    ("system.restarting", "Restart triggered — the app is shutting down and will reopen on the lock screen…"),
     ("settings.users", "Users"),
     ("nav.chats", "Chats"),
     ("nav.settings", "Settings"),
@@ -380,6 +389,7 @@ const EN_US: Dict = &[
     ("transport.sigmesh", "SIG Mesh"),
     ("transport.up", "Up"),
     ("transport.down", "Down"),
+    ("transport.mobileNote", "On mobile only Bluetooth and loopback are available; LAN / Internet (NAT) / SIG Mesh are desktop features"),
     ("common.back", "Back"),
     ("common.close", "Close"),
     ("common.save", "Save"),
@@ -477,7 +487,7 @@ mod tests {
         assert_eq!(zh, en, "zh-CN 与 en-US 键集合必须一致");
         assert_eq!(
             zh.len(),
-            160,
+            162,
             "键数变更时同步本断言与 CI 校验 (got {})",
             zh.len()
         );

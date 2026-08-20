@@ -974,6 +974,9 @@ async fn transports(State(state): State<SharedState>) -> ApiResult {
         .unwrap_or(0);
     let ble_up = state.ble_up.load(std::sync::atomic::Ordering::SeqCst);
     Ok(Json(json!({
+        // 平台标记:移动端仅挂载 ble(回环桥)+loopback,LAN/net/sigmesh 桌面专属,
+        // UI 据此隐藏而非显示"故障";desktop 全量展示。
+        "platform": if cfg!(target_os = "android") { "mobile" } else { "desktop" },
         "ble": if ble_up { "up" } else { "down" },
         "lan": "down",
         "net": if net_up { "up" } else { "down" },

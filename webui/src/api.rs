@@ -109,6 +109,9 @@ pub struct Direct {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TransportStatus {
+    /// "mobile"|"desktop":移动端隐藏 LAN/net/sigmesh(桌面专属传输)。
+    #[serde(default)]
+    pub platform: String,
     pub ble: String,
     pub lan: String,
     pub net: String,

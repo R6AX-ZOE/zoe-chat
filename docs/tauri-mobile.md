@@ -15,7 +15,6 @@
 ┌────────────────────────── Android 真机 ──────────────────────────┐
 │  WebView → http://127.0.0.1:18571/（内嵌守护进程服务,同源,免 CORS）│
 │   ├─ Rust/Leptos wasm UI（webui/dist,zoe-daemon include! 内嵌）  │
-│   └─ zoe_boot_token 命令（tauri invoke）引导登录令牌              │
 │  ┌──────────────────────▼───────────────────────────────┐        │
 │  │ Rust: zoe-daemon(lib,default-features=false)         │        │
 │  │  ├─ 完整 HTTP/WS API(与桌面完全同构)                  │        │
@@ -29,9 +28,9 @@
 
 - **webui/ 为独立 crate（`zoe-webui`）**：Leptos 0.7 CSR → `wasm32-unknown-unknown`，`scripts/build.sh|.ps1` 产出 `dist/`（index.html + styles.css + assets/zoe_webui.js + zoe_webui_bg.wasm）。**dist 与 webui/Cargo.lock 提交入库**（zoe-daemon 编译期 `include_str!/include_bytes!` 内嵌），CI 校验 dist 与源码一致（不一致 → 有网络机器跑 build 脚本后提交）。独立于根 workspace（自带 Cargo.lock；`cargo test --manifest-path webui/Cargo.toml` 跑原生单测，含 i18n 键集合一致性）。
 - **zoe-daemon 拆 lib + bin**：`crates/zoe-daemon/src/lib.rs` 导出 `start(DaemonConfig)`（建库/身份/会话恢复/net 传输/axum 启动）；bin 为薄壳（参数解析 + 打印）。`net` feature 可选：桌面默认开，移动端 `default-features = false` 排除 libp2p。
-- **移动端启动顺序（lib.rs setup）**：① 生成随机令牌 → ② `zoe_daemon::start(DaemonConfig::mobile(data_dir, token))`（`tauri::async_runtime::block_on`，固定端口 18571，绑 127.0.0.1）→ ③ 创建 WebView（`WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))`，先起服务后建窗口，无竞态）。config 里 `app.windows: []`（避免 tauri 先建窗口加载空地址）。
-- **多用户与锁定（2026-08-20 定稿）**：`DaemonConfig::mobile` 不带 `--user/--pin`，按注册表激活账号运行；v1 移动端保持**单用户**（无账号切换入口）。激活账号为 PIN 用户时进入锁定模式（其余 API 423），Web UI 显示锁定屏，`POST /unlock` 输 PIN 解锁——桌面与移动端共用同一锁定/解锁逻辑与 UI。
-- **令牌引导**：UI 启动时若无本地令牌 → `window.__TAURI_INTERNALS__.invoke("zoe_boot_token")`（wasm 内 js_sys Reflect 调用，api.rs `tauri_boot_token`）；桌面浏览器无该环境 → 手动登录页。
+- **移动端启动顺序（lib.rs setup）**：`zoe_daemon::start(DaemonConfig::mobile(data_dir))`（`tauri::async_runtime::block_on`，固定端口 18571，绑 127.0.0.1，移动端模式禁用户切换/自重启）→ 创建 WebView（`WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))`，先起服务后建窗口，无竞态）。config 里 `app.windows: []`（避免 tauri 先建窗口加载空地址）。
+- **多用户与锁定（2026-08-20 定稿）**：`DaemonConfig::mobile` 不带 `--user/--pin`，按注册表激活账号运行；v1 移动端保持**单用户**（无账号切换入口，`POST /users/:id/activate` 返回 400）。激活账号为 PIN 用户时进入锁定模式（其余 API 423），Web UI 显示锁定屏，`POST /unlock` 输 PIN 解锁——桌面与移动端共用同一锁定/解锁逻辑与 UI。
+- **无令牌引导（2026-08-20）**：访问令牌与 `zoe_boot_token`/登录页已移除。UI 启动直连内嵌守护进程（同源）,先探 `/users` 判定锁定态;桌面浏览器同理,无登录步骤。
 - **Android cleartext**：`android/gen-patches/AndroidManifest.xml` 的 application 硬编码 `android:usesCleartextTraffic="true"`（仅回环 127.0.0.1）。
 - **构建管线**：android-tauri.yml 与 ci.yml **不再使用 npm/Node**；tauri CLI 经 `cargo install tauri-cli`。wasm-bindgen-cli 版本 = webui/Cargo.lock 中 wasm-bindgen 版本（脚本自动提取）。
 - **app/ 前端目录已删除**（vite/package.json/src/main.js 控制台 UI 不再使用）；`tauri.conf.json` 保留 `frontendDist: ../../webui/dist`（APK 内打包兜底，实际窗口加载外部 URL 不读取）。
@@ -42,7 +41,7 @@
 - `window.confirm()`（退出群组/吊销设备/恢复身份确认）依赖 WebChromeClient 的 onJsConfirm —— 桌面浏览器与 Android WebView 行为待真机确认；如不可用需改为内联对话框（建群已改为内联对话框，见下）。
 
 **UI 修复记录（2026-08-19，真机/浏览器实测后）**：
-1. **登录报 invalid token**：`api.rs login()` 曾用泛型 `()` 解析响应，而服务端返回 `{"ok":true}`（map）——`()` 只能反序列化 null → 解析失败被 UI 误报"令牌无效"。改为显式 `serde_json::Value`。
+1. **登录报 invalid token**（已随令牌移除而消失,2026-08-20）：`api.rs login()` 曾用泛型 `()` 解析响应,而服务端返回 `{"ok":true}`(map)——`()` 只能反序列化 null → 解析失败被 UI 误报"令牌无效"。改为显式 `serde_json::Value`。
 2. **登录页顶部大量空白**：`mount_to_body` 把内容挂到 `<body>`，而 CSS 的 `#app{height:100%}` 作用在**空的** `#app` div 上（占满视口、把内容挤到下方）。改为 `mount_to(#app)`（`leptos::mount::mount_to(el, App).forget()`，el 需 `unchecked_into::<web_sys::HtmlElement>()`）。
 3. **窄窗口无入口**：<640px 侧栏隐藏，而"新建群组/设置"按钮只在侧栏头部 → 顶栏新增 `+`/齿轮按钮（`.nav-action`，所有宽度可见，不隐藏）；<1024px 时设置视图占满主区域 + 返回按钮（`.settings-back`）。
 4. **建群改用内联对话框**：不依赖 `window.prompt`（Android WebView 下 prompt 不可靠）。
@@ -428,7 +427,8 @@ crates/zoe-cli/src/ble.rs            # 小改:--send-env 与收包重组打印(�
     `[System.IO.File]::ReadAllText($f,[Text.Encoding]::UTF8)` + `WriteAllText($f,$s,(New-Object Text.UTF8Encoding($false)))`**；
     改完用 `Select-String -Pattern "Â|Ã|â‚¬"` 自查。
 19. **`request<T>` 泛型反序列化**：服务端 `{"ok":true}` 类响应**不能**用 `()` 接收（`()` 只认 null），
-    webui 的 `request` 一律显式 `let _: serde_json::Value = request(...).await?`（login 曾因此误报"invalid token"）。
+    webui 的 `request` 一律显式 `let _: serde_json::Value = request(...).await?`（login 曾因此误报"invalid token";
+    login 已随令牌移除而删除,2026-08-20）。
 20. **Leptos 挂载目标**：`mount_to_body` 把内容追加到 `<body>` 末尾；若 CSS 布局依赖 `#app{height:100%}`，
     必须 `mount_to(#app)`（`get_element_by_id("app")` 后 `unchecked_into::<web_sys::HtmlElement>()`），
     否则空的 `#app` 占满视口、真实内容被挤到首屏之外。

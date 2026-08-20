@@ -33,6 +33,7 @@ pub enum Icon {
     Power,
     Logout,
     Paperclip,
+    Restart,
 }
 
 impl Icon {
@@ -65,6 +66,7 @@ impl Icon {
             Icon::Power => "<path d=\"M12 2.5V12\"/><path d=\"M6.3 5.3a8 8 0 1 0 11.4 0\"/>",
             Icon::Logout => "<path d=\"M9 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4\"/><path d=\"M16 17l5-5-5-5\"/><path d=\"M21 12H9\"/>",
             Icon::Paperclip => "<path d=\"m20.6 11.8-8.6 8.5a5 5 0 0 1-7.1-7L14.4 3.6a3.4 3.4 0 0 1 4.8 4.8l-9.5 9.4a1.8 1.8 0 0 1-2.5-2.5l8.4-8.3\"/>",
+            Icon::Restart => "<path d=\"M4.5 12a7.5 7.5 0 1 0 2.2-5.3\"/><path d=\"M4 3.5V8h4.5\"/>",
         }
     }
 }

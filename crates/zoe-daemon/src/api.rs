@@ -1,7 +1,5 @@
 //! HTTP/WS API(docs/api.md 全量契约)+ 内嵌静态 UI。
 
-use std::collections::HashMap;
-
 use axum::body::Body;
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
@@ -23,7 +21,7 @@ use zoe_core::storage::StorageError;
 use zoe_transport::Transport;
 
 use crate::msg;
-use crate::state::{self, ct_eq, now, SharedState};
+use crate::state::{self, now, SharedState};
 
 // ---------------------------------------------------------------------------
 // 错误
@@ -32,7 +30,6 @@ use crate::state::{self, ct_eq, now, SharedState};
 pub enum ApiError {
     NotFound(String),
     BadRequest(String),
-    Unauthorized,
     Internal(String),
 }
 
@@ -41,7 +38,6 @@ impl IntoResponse for ApiError {
         let (status, message) = match self {
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, m),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
-            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             ApiError::Internal(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
         };
         (
@@ -59,25 +55,9 @@ fn internal(e: impl std::fmt::Display) -> ApiError {
 }
 
 // ---------------------------------------------------------------------------
-// 认证中间件
+// 锁定门:未解锁时除用户注册表/解锁外一律 423。
 // ---------------------------------------------------------------------------
 
-async fn auth(State(state): State<SharedState>, req: Request, next: Next) -> Response {
-    let ok = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|a| a.strip_prefix("Bearer "))
-        .map(|t| ct_eq(t.as_bytes(), state.token.as_bytes()))
-        .unwrap_or(false);
-    if ok {
-        next.run(req).await
-    } else {
-        ApiError::Unauthorized.into_response()
-    }
-}
-
-/// 锁定门:未解锁时除用户注册表/解锁外一律 423。
 async fn locked_gate(State(state): State<SharedState>, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let allowed =
@@ -131,24 +111,7 @@ async fn asset(Path(file): Path<String>) -> Result<Response, ApiError> {
 }
 
 // ---------------------------------------------------------------------------
-// 登录与身份
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-struct LoginReq {
-    token: String,
-}
-
-async fn login(State(state): State<SharedState>, Json(req): Json<LoginReq>) -> Response {
-    if ct_eq(req.token.as_bytes(), state.token.as_bytes()) {
-        Json(json!({ "ok": true })).into_response()
-    } else {
-        ApiError::Unauthorized.into_response()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 用户注册表(docs/api.md §2.3;里程碑 1:PIN 保护 + 锁定模式)
+// 用户注册表(docs/api.md §1.1;PIN 保护 + 锁定模式 + 切换)
 // ---------------------------------------------------------------------------
 
 fn user_json(u: &zoe_core::users::User) -> Value {
@@ -175,6 +138,36 @@ async fn users_list(State(state): State<SharedState>) -> ApiResult {
         "unlocked": state::is_unlocked(&state),
         "active": user_json(&active),
         "users": users,
+        "can_switch": !state.mobile,
+    })))
+}
+
+/// 切换活跃用户(仅桌面 CLI):更新 `last_used` 并自重启,重启后按最近使用激活。
+/// 移动端禁用(由宿主应用管理用户生命周期)。
+async fn activate_user(State(state): State<SharedState>, Path(uid_hex): Path<String>) -> ApiResult {
+    if state.mobile {
+        return Err(ApiError::BadRequest(
+            "user switching disabled on mobile".to_string(),
+        ));
+    }
+    let uid = hex::decode(&uid_hex).map_err(|_| ApiError::NotFound("user".to_string()))?;
+    if uid == state::active_user(&state).user_id {
+        return Ok(Json(json!({ "ok": true, "switched": false })));
+    }
+    state.registry.set_last_used(&uid).map_err(internal)?;
+    let _ = state.events.send(
+        json!({
+            "type": "user",
+            "event": "switched",
+            "user_id": hex::encode(&uid),
+        })
+        .to_string(),
+    );
+    crate::relaunch(&state.data_dir, &uid_hex);
+    Ok(Json(json!({
+        "ok": true,
+        "switched": true,
+        "note": "daemon restarting with the new active user",
     })))
 }
 
@@ -223,7 +216,7 @@ async fn create_user(
     Ok(Json(json!({
         "ok": true,
         "user": user_json(&user),
-        "note": "activate by restarting the daemon with --user <id>",
+        "note": "activate by POST /users/{id}/activate (daemon self-restart)",
     })))
 }
 
@@ -1058,13 +1051,8 @@ async fn invite(
 
 async fn events_ws(
     State(state): State<SharedState>,
-    Query(params): Query<HashMap<String, String>>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let token = params.get("token").map(String::as_str).unwrap_or("");
-    if !ct_eq(token.as_bytes(), state.token.as_bytes()) {
-        return ApiError::Unauthorized.into_response();
-    }
     ws.on_upgrade(move |socket| ws_loop(socket, state))
 }
 
@@ -1138,14 +1126,13 @@ pub fn router(state: SharedState) -> Router {
         .route("/settings", get(get_settings).post(post_settings))
         .route("/transports", get(transports))
         .route("/events", get(events_ws))
+        .route("/users/{id}/activate", post(activate_user))
         .route_layer(middleware::from_fn_with_state(state.clone(), locked_gate))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state.clone());
 
     Router::new()
         .route("/", get(index))
         .route("/assets/{file}", get(asset))
-        .route("/api/v1/login", post(login))
         .nest("/api/v1", protected)
         .with_state(state)
 }

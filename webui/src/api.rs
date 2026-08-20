@@ -1,38 +1,12 @@
-//! 守护进程 API 客户端(Bearer token 认证)+ WebSocket 事件流。
+//! 守护进程 API 客户端 + WebSocket 事件流。
 //! 与 docs/api.md 契约一致;经相对路径访问(桌面 daemon 与移动端内嵌 daemon 同源)。
+//! 无访问令牌:验证与锁定由 PIN 协议承担(token 已废弃,2026-08-20)。
 
 use gloo_net::http::Request;
 use gloo_net::websocket::{futures::WebSocket, Message};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen_futures::spawn_local;
-
-const TOKEN_KEY: &str = "zoe.token";
-
-pub fn get_token() -> Option<String> {
-    local_storage()
-        .ok()
-        .flatten()
-        .and_then(|s| s.get_item(TOKEN_KEY).ok().flatten())
-        .filter(|t| !t.is_empty())
-}
-
-pub fn set_token(token: &str) {
-    if let Ok(Some(s)) = local_storage() {
-        let _ = s.set_item(TOKEN_KEY, token);
-    }
-}
-
-pub fn clear_token() {
-    if let Ok(Some(s)) = local_storage() {
-        let _ = s.remove_item(TOKEN_KEY);
-    }
-}
-
-fn local_storage() -> Result<Option<web_sys::Storage>, ()> {
-    let w = web_sys::window().ok_or(())?;
-    w.local_storage().map_err(|_| ())
-}
 
 // ---------------------------------------------------------------------------
 // DTO
@@ -173,17 +147,15 @@ pub struct UsersResp {
     pub unlocked: bool,
     pub active: UserInfo,
     pub users: Vec<UserInfo>,
+    /// 桌面 CLI 支持切换(自重启);移动端内嵌为 false。
+    #[serde(default)]
+    pub can_switch: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Settings {
     pub ui_theme: Option<String>,
     pub ui_language: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct LoginReq {
-    token: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -215,13 +187,10 @@ async fn request<T: DeserializeOwned>(
     path: &str,
     body: Option<String>,
 ) -> Result<T, ApiError> {
-    let mut builder = match method {
+    let builder = match method {
         "POST" => Request::post(path),
         _ => Request::get(path),
     };
-    if let Some(token) = get_token() {
-        builder = builder.header("Authorization", &format!("Bearer {token}"));
-    }
     let req = match body {
         Some(b) => {
             let builder = builder.header("Content-Type", "application/json");
@@ -235,9 +204,6 @@ async fn request<T: DeserializeOwned>(
         .text()
         .await
         .map_err(|e| ApiError(status, e.to_string()))?;
-    if status == 401 {
-        clear_token();
-    }
     if !(200..300).contains(&status) {
         let msg = serde_json::from_str::<serde_json::Value>(&text)
             .ok()
@@ -246,22 +212,6 @@ async fn request<T: DeserializeOwned>(
         return Err(ApiError(status, msg));
     }
     serde_json::from_str(&text).map_err(|e| ApiError(status, e.to_string()))
-}
-
-pub async fn login(token: &str) -> Result<(), ApiError> {
-    // 注意:服务端返回 {"ok":true},必须用 Value 解析 —— 泛型 () 无法反序列化 map
-    let _: serde_json::Value = request(
-        "POST",
-        "/api/v1/login",
-        Some(
-            serde_json::to_string(&LoginReq {
-                token: token.to_string(),
-            })
-            .unwrap(),
-        ),
-    )
-    .await?;
-    Ok(())
 }
 
 pub async fn me() -> Result<Me, ApiError> {
@@ -299,6 +249,17 @@ pub async fn create_user(name: &str, pin: &str) -> Result<UserInfo, ApiError> {
         )),
     )
     .await
+}
+
+/// 切换活跃用户(桌面 CLI):daemon 自重启,重启后该用户成为活跃用户。
+pub async fn activate_user(user_id: &str) -> Result<(), ApiError> {
+    let _: serde_json::Value = request(
+        "POST",
+        &format!("/api/v1/users/{}/activate", encode(user_id)),
+        None,
+    )
+    .await?;
+    Ok(())
 }
 
 /// 更换当前活跃用户的 PIN(需已解锁)。
@@ -479,16 +440,11 @@ pub async fn send_file(group_id: &str, name: &str, mime: &str, data: &str) -> Re
 
 /// 下载文件消息内容(服务端同时落盘并标记已下载)。返回文件字节。
 pub async fn download_file(msg_hash: &str) -> Result<Vec<u8>, ApiError> {
-    let mut builder = Request::get(&format!("/api/v1/files/{}", encode(msg_hash)));
-    if let Some(token) = get_token() {
-        builder = builder.header("Authorization", &format!("Bearer {token}"));
-    }
-    let req = builder.build().map_err(|e| ApiError(0, e.to_string()))?;
+    let req = Request::get(&format!("/api/v1/files/{}", encode(msg_hash)))
+        .build()
+        .map_err(|e| ApiError(0, e.to_string()))?;
     let resp = req.send().await.map_err(|e| ApiError(0, e.to_string()))?;
     let status = resp.status();
-    if status == 401 {
-        clear_token();
-    }
     if !(200..300).contains(&status) {
         return Err(ApiError(status, "download failed".to_string()));
     }
@@ -579,38 +535,11 @@ fn encode(s: &str) -> String {
 /// 事件回调:type 字段 + 其余 JSON。
 pub type EventHandler = Box<dyn FnMut(serde_json::Value)>;
 
-/// Tauri(移动端)专用:经 `window.__TAURI_INTERNALS__.invoke("zoe_boot_token")`
-/// 取内嵌守护进程的访问令牌。桌面浏览器无此环境,返回 None(走手动登录)。
-pub async fn tauri_boot_token() -> Option<String> {
-    let window = web_sys::window()?;
-    let internals = js_sys::Reflect::get(
-        &window,
-        &wasm_bindgen::JsValue::from_str("__TAURI_INTERNALS__"),
-    )
-    .ok()?;
-    if internals.is_undefined() || internals.is_null() {
-        return None;
-    }
-    let invoke =
-        js_sys::Reflect::get(&internals, &wasm_bindgen::JsValue::from_str("invoke")).ok()?;
-    let f = js_sys::Function::from(invoke);
-    let promise = f
-        .call1(
-            &internals,
-            &wasm_bindgen::JsValue::from_str("zoe_boot_token"),
-        )
-        .ok()?;
-    let val = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(promise))
-        .await
-        .ok()?;
-    val.as_string()
-}
-
 pub fn connect_events(mut on_event: EventHandler) {
     spawn_local(async move {
         loop {
             let url = format!(
-                "{proto}://{host}/api/v1/events?token={token}",
+                "{proto}://{host}/api/v1/events",
                 proto = if web_sys::window()
                     .unwrap()
                     .location()
@@ -627,7 +556,6 @@ pub fn connect_events(mut on_event: EventHandler) {
                     .location()
                     .host()
                     .unwrap_or_default(),
-                token = get_token().unwrap_or_default(),
             );
             let Ok(mut ws) = WebSocket::open(&url) else {
                 sleep_ms(2000).await;

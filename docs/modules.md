@@ -31,8 +31,8 @@ zoe-chat/
 │  ├─ Cargo.toml               # zoe-webui:leptos 0.7(csr)/gloo-net/gloo-timers;自带 Cargo.lock(提交入库)
 │  ├─ src/lib.rs               # wasm 入口(#[wasm_bindgen(start)] + mount_to(#app))
 │  ├─ src/app.rs               # 组件:登录/会话列表/消息线程/群组详情/设置(配对·设备·对端·备份恢复·网络·传输·用户管理)/锁定屏(PIN 解锁)
-│  ├─ src/api.rs               # HTTP/WS 客户端(DTO + Bearer token;响应一律显式 Value;tauri_boot_token 移动端引导;users/unlock/create_user/set_pin)
-│  ├─ src/i18n.rs              # 键驱动词典(zh-CN/en-US 各 147 键,单测校验键集合一致)
+│  ├─ src/api.rs               # HTTP/WS 客户端(DTO;响应一律显式 Value;无令牌;users/unlock/create_user/set_pin/activate_user)
+│  ├─ src/i18n.rs              # 键驱动词典(zh-CN/en-US 各 145 键,单测校验键集合一致)
 │  ├─ src/theme.rs             # 深色/浅色:data-theme + prefers-color-scheme + 手动切换
 │  ├─ src/icons.rs             # 自绘 SVG 图标(24×24,stroke 1.5,圆滑路径;无 emoji)
 │  ├─ static/                  # 外壳:index.html(wasm 加载器)+ styles.css(CSS 变量主题,WCAG AA)
@@ -93,7 +93,7 @@ impl MlsSession {
 ## 4. 测试策略
 
 - **单元**:信封编解码(往返、截断、超长、未知字段);指纹/助记词向量;storage schema 迁移。
-- **i18n**:CI 校验各语言键集合一致(webui/src/i18n.rs 单测,zh-CN/en-US 各 147 键);占位符与 `t()` 调用参数匹配。
+- **i18n**:CI 校验各语言键集合一致(webui/src/i18n.rs 单测,zh-CN/en-US 各 145 键);占位符与 `t()` 调用参数匹配。
 - **webui(Rust/Leptos)**:原生目标 `cargo test --manifest-path webui/Cargo.toml`(i18n 键集合等纯逻辑);wasm 产物构建 + `git diff --exit-code webui/dist` 校验提交的 dist 与源码一致(CI 双 workflow 执行)。**源码必须保持 UTF-8**(PS 5.1 默认编码读写会损坏非 ASCII,见 docs/tauri-mobile.md 坑 18)。
 - **集成(核心)**:双节点 loopback 全流程测试——配对 → 建群 → 互发 → update → 加人 → 移除 → 离线重放;乱序/丢包注入(fuzz 调度器)。
 - **协调者故障测试**:协调者离线期间 Proposal 排队,恢复后重放,epoch 一致性。

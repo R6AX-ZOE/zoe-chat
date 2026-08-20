@@ -35,9 +35,10 @@ pub struct AppState {
     pub unlocked: AtomicBool,
     /// 多用户注册表(data_dir/users.db)。
     pub registry: UserRegistry,
-    /// 当前激活用户(启动时解析;切换需重启,v1 约定)。
+    /// 当前激活用户(启动时解析;切换 = /users/:id/activate 自重启,v1 约定)。
     pub active_user: Mutex<User>,
-    pub token: String,
+    /// 移动端内嵌模式(禁用户切换/自重启)。
+    pub mobile: bool,
     /// WS 事件总线(JSON 文本)。
     pub events: broadcast::Sender<String>,
     /// libp2p 远程传输(M3;无 net feature 时为占位)。

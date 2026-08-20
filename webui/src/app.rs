@@ -36,7 +36,6 @@ struct Ctx {
     messages: RwSignal<Vec<api::Msg>>,
     has_older: RwSignal<bool>,
     mnemonic: RwSignal<Option<String>>,
-    logged_in: RwSignal<bool>,
     /// 锁定模式:活跃用户为 PIN 保护且未解锁(423 门禁;仅 /users /unlock 开放)。
     locked: RwSignal<bool>,
     /// 用户注册表快照(锁定屏与设置页共用)。
@@ -112,6 +111,8 @@ impl Ctx {
                     Some("group") => ctx.refresh_groups(),
                     Some("transport") => ctx.refresh_transports(),
                     Some("peer") => ctx.refresh_peers(),
+                    // 切换用户后 daemon 自重启:重启即重连;完成后重探注册表/解锁状态
+                    Some("user") => ctx.finish_login(),
                     _ => {}
                 }
             }));
@@ -317,7 +318,6 @@ pub fn App() -> impl IntoView {
         messages: RwSignal::new(Vec::new()),
         has_older: RwSignal::new(false),
         mnemonic: RwSignal::new(None),
-        logged_in: RwSignal::new(false),
         locked: RwSignal::new(false),
         users: RwSignal::new(None),
         direct_dialog: RwSignal::new(None),
@@ -352,28 +352,10 @@ pub fn App() -> impl IntoView {
     // 系统主题跟随
     crate::theme::watch_system(ctx.theme);
 
-    // 启动流程
+    // 启动流程:无访问令牌(token 已废弃),直接探测注册表判定锁定门
     let boot = move || {
         let ctx = ctx;
         spawn_local(async move {
-            let mut token = api::get_token();
-            // 移动端(tauri):经 __TAURI_INTERNALS__ 取内嵌守护进程令牌
-            if token.is_none() {
-                token = crate::api::tauri_boot_token().await;
-                if let Some(t) = &token {
-                    api::set_token(t);
-                }
-            }
-            let Some(t) = token else {
-                ctx.logged_in.set(false);
-                return;
-            };
-            if api::login(&t).await.is_err() {
-                api::clear_token();
-                ctx.logged_in.set(false);
-                return;
-            }
-            ctx.logged_in.set(true);
             ctx.finish_login();
         });
     };
@@ -384,77 +366,11 @@ pub fn App() -> impl IntoView {
         <main>
             <Show
                 when=move || ctx.locked.get()
-                fallback=move || view! {
-                    <Show
-                        when=move || !ctx.logged_in.get()
-                        fallback=move || view! { <AppShell ctx=ctx /> }
-                    >
-                        <LoginView ctx=ctx />
-                    </Show>
-                }
+                fallback=move || view! { <AppShell ctx=ctx /> }
             >
                 <LockView ctx=ctx />
             </Show>
         </main>
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 登录
-// ---------------------------------------------------------------------------
-
-#[component]
-fn LoginView(ctx: Ctx) -> impl IntoView {
-    let token_input = RwSignal::new(String::new());
-    let error = RwSignal::new(String::new());
-
-    let do_login = move || {
-        let token_input = token_input;
-        let error = error;
-        let ctx = ctx;
-        spawn_local(async move {
-            let t = token_input.get().trim().to_string();
-            if t.is_empty() {
-                return;
-            }
-            match api::login(&t).await {
-                Ok(()) => {
-                    api::set_token(&t);
-                    ctx.logged_in.set(true);
-                    ctx.finish_login();
-                }
-                Err(_) => error.set(ctx.t("login.error")),
-            }
-        });
-    };
-
-    view! {
-        <div class="login">
-            <div class="login-card">
-                <div class="logo"><IconView icon=Icon::Lock size=40 /></div>
-                <h1>{move || ctx.t("app.title")}</h1>
-                <p class="sub">{move || ctx.t("app.tagline")}</p>
-                <div class="field">
-                    <label for="token-input">{move || ctx.t("login.token")}</label>
-                    <input
-                        id="token-input"
-                        type="password"
-                        autocomplete="off"
-                        spellcheck="false"
-                        prop:value=move || token_input.get()
-                        on:input=move |ev| token_input.set(event_target_value(&ev))
-                        on:keydown=move |ev| {
-                            if ev.key() == "Enter" { do_login(); }
-                        }
-                    />
-                </div>
-                <button class="primary" on:click=move |_| do_login()>
-                    <IconView icon=Icon::Shield size=18 />
-                    {move || ctx.t("login.submit")}
-                </button>
-                <div class="error">{move || error.get()}</div>
-            </div>
-        </div>
     }
 }
 
@@ -1610,12 +1526,42 @@ fn UsersPanel(ctx: Ctx) -> impl IntoView {
     let chg_pin = RwSignal::new(String::new());
     let chg_msg = RwSignal::new(String::new());
     let chg_ok = RwSignal::new(false);
+    let switch_msg = RwSignal::new(String::new());
 
     let refresh = move || {
         let ctx = ctx;
         spawn_local(async move {
             if let Ok(u) = api::users().await {
                 ctx.users.set(Some(u));
+            }
+        });
+    };
+
+    // 切换用户:daemon 自重启,期间持续探测直至新活跃用户生效
+    let do_activate = move |user_id: String| {
+        let ctx = ctx;
+        let switch_msg = switch_msg;
+        spawn_local(async move {
+            switch_msg.set(ctx.t("users.switching"));
+            match api::activate_user(&user_id).await {
+                Ok(_) => {
+                    for _ in 0..20 {
+                        api::sleep_ms(1000).await;
+                        if let Ok(u) = api::users().await {
+                            if u.active.user_id == user_id {
+                                ctx.users.set(Some(u.clone()));
+                                ctx.locked.set(!u.unlocked);
+                                if u.unlocked {
+                                    ctx.finish_login();
+                                }
+                                switch_msg.set(String::new());
+                                return;
+                            }
+                        }
+                    }
+                    switch_msg.set(ctx.t("users.switchTimeout"));
+                }
+                Err(e) => switch_msg.set(ctx.t("common.failed") + &format!(" ({e})")),
             }
         });
     };
@@ -1695,11 +1641,13 @@ fn UsersPanel(ctx: Ctx) -> impl IntoView {
                     return vec![view! { <div class="note">{move || ctx.t("devices.none")}</div> }.into_any()];
                 };
                 let active_id = u.active.user_id.clone();
+                let can_switch = u.can_switch;
                 u.users.into_iter().map(move |x| {
                     let xid = x.user_id.clone();
                     let is_active = xid == active_id;
                     let kind_label = ctx.t(if x.kind == "pin" { "users.pin" } else { "users.plain" });
                     let shorted = short(&xid);
+                    let do_activate = do_activate;
                     view! {
                         <div class="list-row" class:muted=move || !is_active>
                             <span class="lr-main">
@@ -1710,10 +1658,29 @@ fn UsersPanel(ctx: Ctx) -> impl IntoView {
                                 </span>
                                 <span class="lr-sub">{format!("{kind_label} · {shorted}")}</span>
                             </span>
+                            <span class="lr-actions">
+                                {if can_switch && !is_active {
+                                    view! {
+                                        <button
+                                            class="icon"
+                                            title={move || ctx.t("users.switch")}
+                                            on:click=move |_| {
+                                                let xid = xid.clone();
+                                                do_activate(xid);
+                                            }
+                                        >
+                                            <IconView icon=Icon::Restart size=16 />
+                                        </button>
+                                    }.into_any()
+                                } else {
+                                    ().into_any()
+                                }}
+                            </span>
                         </div>
                     }.into_any()
                 }).collect::<Vec<AnyView>>()
             }}
+            <div class="note" style:color="var(--info)">{move || switch_msg.get()}</div>
             <p class="note" style="margin-top:8px">{move || ctx.t("lock.restartHint")}</p>
             <div class="row" style="margin-top:8px">
                 <input

@@ -33,9 +33,9 @@
 
 - 创建用户时设置 **PIN**；身份种子以 `argon2id(PIN) → ChaCha20-Poly1305` 加密落盘（`salt||nonce||ciphertext`），明文种子不落磁盘
 - 守护进程启动带 `--user <id> [--pin <pin>]` 即加载该账号；激活账号为 PIN 用户而 `--pin` 缺失时以**锁定模式**启动——仅用户管理/解锁 API 可用，其余返回 423，Web UI 显示锁定屏（输入 PIN 经 `POST /unlock` 解锁，不重启恢复会话）
-- 切换用户：`zoe-cli user activate <id>` 后重启守护进程（v1 约定，无运行时热切）
+- 切换用户：`POST /users/:id/activate` → 更新 `last_used` → 守护进程**自重启**（桌面；端口经 `data_dir/port` 持久化不变，Web UI 轮询恢复；移动端禁用）。`set-pin` 即时生效，无需重启
 - 旧版明文数据自动迁移为 `default` 用户（无 PIN，可 `zoe-cli user set-pin` 或 UI 设置页补设）
-- 用户管理 API：`GET/POST /users`（列表/创建）、`POST /users/:id/set-pin`（仅激活账号）、`POST /unlock`；详见 [docs/api.md](docs/api.md) §1.1 与 [docs/storage.md](docs/storage.md) §1.1
+- 用户管理 API：`GET/POST /users`（列表/创建）、`POST /users/:id/activate`（切换用户/自重启）、`POST /users/:id/set-pin`（激活账号）、`POST /unlock`；详见 [docs/api.md](docs/api.md) §1.1 与 [docs/storage.md](docs/storage.md) §1.1
 - 移动端（Tauri）v1 保持单用户：内嵌 daemon 不带 `--user`；若账号为 PIN 用户则动态锁定，由 UI 锁定屏解锁
 
 ```sh
@@ -66,9 +66,9 @@ cargo run -p zoe-cli -- demo        # M0 双节点 loopback 演示
 
 cargo run -p zoe-daemon -- --data-dir zoe-data
 cargo run -p zoe-daemon -- --data-dir zoe-data --user <id> --pin 123456   # PIN 用户直接解锁；不带 --pin 则进入锁定模式
-# 启动后浏览器打开输出的 http://127.0.0.1:<port>，输入访问令牌
+# 启动后浏览器打开输出的 http://127.0.0.1:<port>（无访问令牌、无登录步骤；端口持久化在数据目录 port 文件）
 # 双设备互通：一台在 UI 设置页复制"监听地址"发给对方 → 对方在群组详情页粘贴邀请
-# 可选参数：--port N(固定端口)、--token STR(指定令牌)
+# 可选参数：--port N(固定端口)；Web UI 设置 → 用户 点击切换(自重启)
 ```
 
 ## 移动端（Android）

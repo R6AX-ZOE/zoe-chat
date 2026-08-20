@@ -10,6 +10,11 @@
 //! **pin** 用户 = `users/<id>/` 子目录,种子以 argon2id(PIN) 派生的密钥加密)。
 //! 激活用户带 PIN 且启动未提供 `--pin` 时进入**锁定模式**:除用户管理与
 //! 解锁端点外一律 423;`unlock` 通过後完整初始化身份/设备/net。
+//!
+//! 认证:无访问令牌(token 已废弃,2026-08-20)。守护进程仅绑定 127.0.0.1,
+//! 验证职责由 PIN 承担(plain 用户无验证,v1 接受该本地信任模型)。
+//! 端口:桌面默认随机,但持久化到 `data_dir/port` —— 重启/切换用户后端口不变,
+//! Web UI 无需重新输入地址。
 
 pub mod api;
 pub mod msg;
@@ -35,17 +40,20 @@ use crate::state::{now, AppState, SharedState};
 /// 移动端内嵌守护进程的固定端口(WebView 加载地址)。
 pub const MOBILE_PORT: u16 = 18571;
 
+/// 桌面端口持久化文件(data_dir/port;仅桌面模式使用)。
+pub const PORT_FILE: &str = "port";
+
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
     pub data_dir: PathBuf,
-    /// 0 = 随机端口(桌面默认)。
+    /// 0 = 随机端口(桌面默认;首次绑定后写入 data_dir/port,重启复用)。
     pub port: u16,
-    /// None = 从 data_dir/token 读取或生成(桌面默认)。
-    pub token: Option<String>,
     /// 显式指定激活用户(user_id hex);None = 最近使用。
     pub user_id: Option<String>,
     /// PIN(PIN 保护用户启动解锁;缺席 → 锁定模式)。
     pub pin: Option<String>,
+    /// 移动端内嵌模式(禁用户切换;端口固定 MOBILE_PORT;不做自重启)。
+    pub mobile: bool,
 }
 
 impl DaemonConfig {
@@ -53,9 +61,9 @@ impl DaemonConfig {
         Self {
             data_dir,
             port: 0,
-            token: None,
             user_id: None,
             pin: None,
+            mobile: false,
         }
     }
 
@@ -65,13 +73,13 @@ impl DaemonConfig {
         c
     }
 
-    pub fn mobile(data_dir: PathBuf, token: String) -> Self {
+    pub fn mobile(data_dir: PathBuf) -> Self {
         Self {
             data_dir,
             port: MOBILE_PORT,
-            token: Some(token),
             user_id: None,
             pin: None,
+            mobile: true,
         }
     }
 }
@@ -104,20 +112,64 @@ pub struct Daemon {
     pub server: tokio::task::JoinHandle<()>,
 }
 
-/// 读取或生成访问令牌(0600,写入 data_dir/token)。
-pub fn load_or_create_token(dir: &std::path::Path) -> Result<String, std::io::Error> {
-    let path = dir.join("token");
-    if let Ok(t) = std::fs::read_to_string(&path) {
-        let t = t.trim().to_string();
-        if !t.is_empty() {
-            return Ok(t);
+/// 读取持久化端口(data_dir/port;仅桌面模式使用)。
+fn read_persisted_port(dir: &std::path::Path) -> Option<u16> {
+    std::fs::read_to_string(dir.join(PORT_FILE))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// CLI 自重启开关(main.rs 开启;内嵌 Tauri 场景保持关闭,由宿主负责重启)。
+static SELF_RELAUNCH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 允许切换用户时以 `--user <id>` 重新拉起自身进程(桌面 CLI 模式)。
+pub fn enable_self_relaunch() {
+    SELF_RELAUNCH.store(true, Ordering::Relaxed);
+}
+
+/// 切换用户自重启:以相同数据目录/端口 + 新 `--user` 拉起自身,随后退出本进程。
+/// 仅当 `enable_self_relaunch()` 已开启时生效(移动端/内嵌由宿主重启)。
+pub fn relaunch(data_dir: &std::path::Path, user_hex: &str) {
+    if !SELF_RELAUNCH.load(Ordering::Relaxed) {
+        return;
+    }
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("--data-dir").arg(data_dir);
+    if let Some(p) = read_persisted_port(data_dir) {
+        cmd.arg("--port").arg(p.to_string());
+    }
+    cmd.arg("--user").arg(user_hex);
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if cmd.spawn().is_ok() {
+        // 老进程延后退出,让响应先送达;新进程绑定端口带重试,等老进程让出端口。
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            std::process::exit(0);
+        });
+    }
+}
+
+/// 绑定 127.0.0.1 指定端口,带重试(自重启时新进程需等老进程让出端口)。
+async fn bind_with_retry(port: u16) -> Result<TcpListener, std::io::Error> {
+    let mut last = None;
+    for _ in 0..6 {
+        match TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await {
+            Ok(l) => return Ok(l),
+            Err(e) => {
+                last = Some(e);
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
         }
     }
-    let mut bytes = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
-    let token = hex::encode(bytes);
-    std::fs::write(&path, &token)?;
-    Ok(token)
+    Err(last.unwrap_or_else(|| std::io::Error::other("bind failed")))
 }
 
 // ---------------------------------------------------------------------------
@@ -352,10 +404,7 @@ pub async fn start(config: DaemonConfig) -> Result<Daemon, DaemonError> {
         unlocked: std::sync::atomic::AtomicBool::new(false),
         registry,
         active_user: Mutex::new(active_user.clone()),
-        token: match &config.token {
-            Some(t) => t.clone(),
-            None => load_or_create_token(&config.data_dir)?,
-        },
+        mobile: config.mobile,
         events: events_tx,
         net: Mutex::new(None),
         pending_keypackages: Mutex::new(HashMap::new()),
@@ -387,15 +436,34 @@ pub async fn start(config: DaemonConfig) -> Result<Daemon, DaemonError> {
     }
 
     let router = api::router(state.clone());
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, config.port))
-        .await
-        .map_err(|e| {
+    // 端口:显式 > 持久化(data_dir/port)> 随机。桌面模式绑定后一律持久化,
+    // 保证重启/切换用户后端口不变(Web UI 无需换地址);自重启时靠重试等老进程退场。
+    let port = if config.port != 0 {
+        config.port
+    } else {
+        read_persisted_port(&config.data_dir).unwrap_or(0)
+    };
+    let listener = if port == 0 {
+        TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .map_err(|e| {
+                DaemonError::Bind(SocketAddr::from(([127, 0, 0, 1], 0)), e.to_string())
+            })?
+    } else {
+        bind_with_retry(port).await.map_err(|e| {
             DaemonError::Bind(
-                SocketAddr::from(([127, 0, 0, 1], config.port)),
+                SocketAddr::from(([127, 0, 0, 1], port)),
                 e.to_string(),
             )
-        })?;
+        })?
+    };
     let addr = listener.local_addr()?;
+    if !config.mobile {
+        let _ = std::fs::write(
+            config.data_dir.join(PORT_FILE),
+            addr.port().to_string(),
+        );
+    }
     let server = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
     });

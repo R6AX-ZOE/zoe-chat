@@ -47,6 +47,28 @@
 4. **建群改用内联对话框**：不依赖 `window.prompt`（Android WebView 下 prompt 不可靠）。
 5. **Peer ID 显示乱码**：历史遗留 —— 曾用 PS 5.1 `Get-Content/Set-Content`（默认 GBK 读写）批量改源码，损坏 `app.rs`/`api.rs` 的非 ASCII 字符（`…`/`·`/中文注释）。整体重写为干净 UTF-8（见坑 18）。
 
+**真机修复记录（2026-08-20，targetSdk 36 edge-to-edge + 首次启动体验 + 传输状态）**：
+1. **WebView 顶部被状态栏遮挡**：targetSdk 36 强制 edge-to-edge（`enableEdgeToEdge` 删除无效），
+   窗口自动延伸到状态栏区（`dumpsys window windows` 可见 frame 全屏）。修复 = 纯 CSS 让位：
+   `webui/static/styles.css`（产物 dist 需重构建）在 `:root` 定义 `--sat/--sab = env(safe-area-inset-*)`，
+   `.app-header` 顶距 = `calc(8px + var(--sat))`（状态栏不挡顶栏），`.thread-input/.app` 底部用 `--sab`
+   （手势条不挡输入框）。窗口（状态栏区）背景另由 `android/gen-patches/values[-night]/themes.xml +
+   colors.xml` 置为与 webui 主题 `--bg` 一致的 `zoe_window_bg`（#f4f6f9 / #0f1216），状态栏/导航栏
+   图标深浅随主题（`windowLightStatusBar/NavigationBar`）；`scripts/patch-android-gen.sh` 已扩展为
+   把这些 res 文件一并覆盖进 gen/android。
+2. **移动端看不到登录/PIN**：token 移除后 plain 默认用户直接进入应用（无锁屏,符合设计）。
+   新增**首次运行引导 OnboardView**（webui `app.rs` + i18n）：移动端（`can_switch=false`）+
+   活跃用户为 plain + 注册表无 PIN 用户时,启动直接弹"设置设备 PIN"卡片
+   （`set_pin` 对激活用户设置,`users.pinTooShort/onboard.*` 键）;设置成功后下一页重启即可见
+   锁定屏(重启后把 `Device` 用户看作 PIN 依赖:seed 走注册表解密,无 `--pin` 即锁定模式 → LockView);
+   "稍后再说"写 localStorage `zoe.onboard.skip` 不再打扰。PIN 设置后当前会话保持解锁,
+   锁定 gate 只在下次冷启动生效(见 docs/api.md §1.1)。
+3. **传输状态全 down**：真实情况是 —— `net`(libp2p)特征关闭 / `lan` / `sigmesh` 移动端未挂载,
+   如实 down;**`ble` 改为反映真实链路**:setup 启动即自动 `start_bridge`（accept 常驻 + 发 start 启广播）,
+   后台任务每 2s 轮询 `bridge_status().connected` 回写 daemon `AppState.ble_up`
+   （`state::set_ble_up`,变化时发 WS `transport` 事件,UI 传输点即时刷新）。桥连上 = `ble: up`
+   （物理链路可用,广播已起;帧→MeshOverlay 仍是 M2 未接线,见"已知限制"）。
+
 ## 目标
 
 用 Tauri 2 把 `zoe-core`（E2E/MLS）+ `zoe-transport` 的 MeshOverlay（分片/重组/去重/TTL）

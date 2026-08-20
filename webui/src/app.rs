@@ -38,6 +38,8 @@ struct Ctx {
     mnemonic: RwSignal<Option<String>>,
     /// 锁定模式:活跃用户为 PIN 保护且未解锁(423 门禁;仅 /users /unlock 开放)。
     locked: RwSignal<bool>,
+    /// 首次启动引导:移动端默认用户未设 PIN 时提示设置(设置后重启即见锁定屏)。
+    onboard: RwSignal<bool>,
     /// 用户注册表快照(锁定屏与设置页共用)。
     users: RwSignal<Option<api::UsersResp>>,
     /// 直接对讲对话框(扫码 + 新私聊)。
@@ -54,6 +56,17 @@ struct DirectDialog {
 impl Ctx {
     fn t(&self, key: &str) -> String {
         t2(self.lang.get(), key)
+    }
+
+    /// 首次运行判定:移动端 + 未锁定 + 活跃用户为明文且注册表无任何 PIN 用户。
+    fn first_run(&self, u: &Option<api::UsersResp>, unlocked: bool) -> bool {
+        unlocked
+            && !u.as_ref().map(|x| x.can_switch).unwrap_or(false)
+            && u.as_ref()
+                .map(|x| {
+                    x.active.kind == "plain" && x.users.iter().all(|y| y.kind != "pin")
+                })
+                .unwrap_or(false)
     }
 
     fn current_group(&self) -> Option<api::Group> {
@@ -94,8 +107,12 @@ impl Ctx {
         spawn_local(async move {
             let u = api::users().await.ok();
             ctx.users.set(u.clone());
-            let unlocked = u.map(|x| x.unlocked).unwrap_or(false);
+            let unlocked = u.as_ref().map(|x| x.unlocked).unwrap_or(false);
             ctx.locked.set(!unlocked);
+            // 首次运行引导:移动端(不可切换用户)+ 活跃用户未设 PIN → 提示设置。
+            // 用户跳过则记 localStorage,不再打扰;设置成功后 active.kind 变 pin 自动消失。
+            let first_run = ctx.first_run(&u, unlocked);
+            ctx.onboard.set(first_run && !app_skip_onboard());
             if !unlocked {
                 return;
             }
@@ -319,6 +336,7 @@ pub fn App() -> impl IntoView {
         has_older: RwSignal::new(false),
         mnemonic: RwSignal::new(None),
         locked: RwSignal::new(false),
+        onboard: RwSignal::new(false),
         users: RwSignal::new(None),
         direct_dialog: RwSignal::new(None),
     };
@@ -366,7 +384,16 @@ pub fn App() -> impl IntoView {
         <main>
             <Show
                 when=move || ctx.locked.get()
-                fallback=move || view! { <AppShell ctx=ctx /> }
+                fallback=move || {
+                    view! {
+                        <Show
+                            when=move || ctx.onboard.get()
+                            fallback=move || view! { <AppShell ctx=ctx /> }
+                        >
+                            <OnboardView ctx=ctx />
+                        </Show>
+                    }
+                }
             >
                 <LockView ctx=ctx />
             </Show>
@@ -451,6 +478,148 @@ fn LockView(ctx: Ctx) -> impl IntoView {
                 </button>
                 <div class="error">{move || error.get()}</div>
                 <p class="note" style="margin-top:12px">{move || ctx.t("lock.restartHint")}</p>
+            </div>
+        </div>
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 首次运行引导(移动端默认用户未设 PIN 时):设置 PIN,重启后进入锁定屏。
+// 用户跳过 → localStorage 标记,本次安装不再打扰。
+// ---------------------------------------------------------------------------
+
+const ONBOARD_SKIP_KEY: &str = "zoe.onboard.skip";
+
+fn app_skip_onboard() -> bool {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(ONBOARD_SKIP_KEY).ok().flatten())
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
+fn mark_onboard_skipped() {
+    let Some(w) = web_sys::window() else { return };
+    if let Ok(Some(s)) = w.local_storage() {
+        let _ = s.set_item(ONBOARD_SKIP_KEY, "1");
+    }
+}
+
+#[component]
+fn OnboardView(ctx: Ctx) -> impl IntoView {
+    let pin = RwSignal::new(String::new());
+    let confirm = RwSignal::new(String::new());
+    let error = RwSignal::new(String::new());
+    let done = RwSignal::new(false);
+    let busy = RwSignal::new(false);
+
+    let do_set = move || {
+        let ctx = ctx;
+        let pin = pin;
+        let confirm = confirm;
+        let error = error;
+        let done = done;
+        let busy = busy;
+        spawn_local(async move {
+            if busy.get() {
+                return;
+            }
+            let p = pin.get().trim().to_string();
+            let c = confirm.get().trim().to_string();
+            if p.len() < 4 {
+                error.set(ctx.t("users.pinTooShort"));
+                return;
+            }
+            if p != c {
+                error.set(ctx.t("onboard.mismatch"));
+                return;
+            }
+            busy.set(true);
+            error.set(String::new());
+            let uid = ctx
+                .users
+                .get()
+                .map(|u| u.active.user_id.clone())
+                .unwrap_or_default();
+            if uid.is_empty() {
+                error.set(ctx.t("common.failed"));
+            } else {
+                match api::set_pin(&uid, &p).await {
+                    Ok(()) => {
+                        pin.set(String::new());
+                        confirm.set(String::new());
+                        done.set(true);
+                        ctx.finish_login();
+                    }
+                    Err(e) => error.set(ctx.t("common.failed") + &format!(" ({e})")),
+                }
+            }
+            busy.set(false);
+        });
+    };
+
+    let do_skip = move || {
+        mark_onboard_skipped();
+        ctx.onboard.set(false);
+    };
+
+    view! {
+        <div class="login">
+            <div class="login-card">
+                <div class="logo"><IconView icon=Icon::Lock size=40 /></div>
+                <h1>{move || ctx.t("onboard.title")}</h1>
+                <p class="sub">{move || ctx.t("onboard.sub")}</p>
+                {move || {
+                    if done.get() {
+                        view! {
+                            <div class="kv">
+                                <span class="k">{move || ctx.t("onboard.done")}</span>
+                                <span class="v" style="color:var(--ok)">OK</span>
+                            </div>
+                            <p class="note" style="margin-top:8px">{move || ctx.t("onboard.doneHint")}</p>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <div class="field">
+                                <label for="onboard-pin">{move || ctx.t("onboard.pin")}</label>
+                                <input
+                                    id="onboard-pin"
+                                    type="password"
+                                    inputmode="numeric"
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                    prop:value=move || pin.get()
+                                    on:input=move |ev| pin.set(event_target_value(&ev))
+                                    on:keydown=move |ev| {
+                                        if ev.key() == "Enter" { do_set(); }
+                                    }
+                                />
+                            </div>
+                            <div class="field">
+                                <label for="onboard-confirm">{move || ctx.t("onboard.confirm")}</label>
+                                <input
+                                    id="onboard-confirm"
+                                    type="password"
+                                    inputmode="numeric"
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                    prop:value=move || confirm.get()
+                                    on:input=move |ev| confirm.set(event_target_value(&ev))
+                                    on:keydown=move |ev| {
+                                        if ev.key() == "Enter" { do_set(); }
+                                    }
+                                />
+                            </div>
+                            <div class="error">{move || error.get()}</div>
+                            <button class="primary" prop:disabled=move || busy.get() on:click=move |_| do_set()>
+                                {move || if busy.get() { ctx.t("onboard.busy") } else { ctx.t("onboard.set") }}
+                            </button>
+                            <div style="margin-top:10px;display:flex;justify-content:center">
+                                <button class="icon" on:click=move |_| do_skip()>{move || ctx.t("onboard.skip")}</button>
+                            </div>
+                        }.into_any()
+                    }
+                }}
             </div>
         </div>
     }

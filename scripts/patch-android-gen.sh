@@ -24,8 +24,11 @@ MANIFEST_SRC="$SRC/AndroidManifest.xml"
 GEN="app/src-tauri/gen/android/app/src/main"
 MAIN_DST="$GEN/java/com/zoechat/mobile/MainActivity.kt"
 MANIFEST_DST="$GEN/AndroidManifest.xml"
+RES_DST="$GEN/res"
 
-for f in "$MAIN_SRC" "$MANIFEST_SRC" "android/zoe-ci-release.keystore"; do
+for f in "$MAIN_SRC" "$MANIFEST_SRC" "$SRC/values/colors.xml" "$SRC/values/themes.xml" \
+         "$SRC/values-night/colors.xml" "$SRC/values-night/themes.xml" \
+         "android/zoe-ci-release.keystore"; do
   if [ ! -f "$f" ]; then
     echo "error: 缺少 patch 文件 $f" >&2
     exit 1
@@ -38,6 +41,9 @@ fi
 
 cp -v "$MAIN_SRC" "$MAIN_DST"
 cp -v "$MANIFEST_SRC" "$MANIFEST_DST"
+mkdir -p "$RES_DST/values" "$RES_DST/values-night"
+cp -v "$SRC/values/colors.xml" "$SRC/values/themes.xml" "$RES_DST/values/"
+cp -v "$SRC/values-night/colors.xml" "$SRC/values-night/themes.xml" "$RES_DST/values-night/"
 
 # --- release 签名注入 ---
 # 注:不能 `apply(from = "xx.gradle.kts")` 独立脚本——Kotlin DSL 跨脚本 apply 无 android{} 访问器
@@ -71,4 +77,4 @@ android {
 EOF
 fi
 grep -q 'zoe-ci-release.keystore' "$BUILD_GRADLE"
-echo "patched: MainActivity.kt / AndroidManifest.xml / release signing"
+echo "patched: MainActivity.kt / AndroidManifest.xml / res(themes,colors) / release signing"

@@ -36,12 +36,29 @@ pub fn run() {
                 data_dir,
             )))
             .map_err(|e| format!("embedded daemon start: {e}"))?;
+            let daemon_state = daemon.state.clone();
             app.manage(EmbeddedDaemon {
                 state: daemon.state,
                 addr: daemon.addr,
             });
 
-            // 2) 创建 WebView,加载内嵌守护进程地址(先起服务后建窗口,避免竞态)
+            // 3) BLE 桥:开机自启(accept 常驻 + 向 Kotlin 发 start)。
+            //    同时轮询桥状态回写 daemon(AppState.ble_up),transports 的
+            //    `ble` 字段如实反映桥链路;真断开时 UI 传输点即时变红。
+            {
+                let state = daemon_state;
+                let app = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = bridge::start_bridge(app.clone()).await;
+                    loop {
+                        let st = bridge::bridge_status().await;
+                        zoe_daemon::state::set_ble_up(&state, st.is_connected());
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                });
+            }
+
+            // 4) 创建 WebView,加载内嵌守护进程地址(先起服务后建窗口,避免竞态)
             let url = tauri::Url::parse(&format!("http://{}/", daemon.addr))
                 .map_err(|e| format!("bad url: {e}"))?;
             tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(url))

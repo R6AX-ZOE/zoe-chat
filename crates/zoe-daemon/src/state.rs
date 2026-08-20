@@ -49,6 +49,9 @@ pub struct AppState {
     /// 配对模式状态(protocol.md §1)。
     pub pairing: AtomicBool,
     pub pair_code: Mutex<Option<[u8; 8]>>,
+    /// 移动端 BLE 桥状态(内嵌守护进程由宿主 Tauri 应用轮询回写;
+    /// 桌面无桥,恒 false → transports 如实上报 down)。
+    pub ble_up: AtomicBool,
     pub started_at: i64,
 }
 
@@ -97,6 +100,23 @@ pub fn mls_identity(state: &SharedState) -> Option<Arc<MlsIdentity>> {
 /// 当前激活用户信息。
 pub fn active_user(state: &SharedState) -> User {
     state.active_user.lock().unwrap().clone()
+}
+
+/// 回写移动端 BLE 桥状态(宿主应用轮询调用);变化时向 WS 发 `transport` 事件,
+/// 使 Web UI 传输状态点即时刷新(与桌面 libp2p 变化通知语义一致)。
+pub fn set_ble_up(state: &SharedState, up: bool) {
+    let prev = state.ble_up.swap(up, Ordering::SeqCst);
+    if prev == up {
+        return;
+    }
+    let _ = state.events.send(
+        serde_json::json!({
+            "type": "transport",
+            "event": "changed",
+            "ble": up,
+        })
+        .to_string(),
+    );
 }
 
 /// 激活用户是否 PIN 保护。

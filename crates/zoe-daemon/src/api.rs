@@ -966,13 +966,15 @@ async fn post_settings(
 }
 
 async fn transports(State(state): State<SharedState>) -> ApiResult {
-    // loopback + net(libp2p)常驻;BLE/SIG Mesh 驱动未挂载时如实上报 down
+    // loopback + net(libp2p)常驻;BLE 状态由宿主应用(移动端回环桥)回写,
+    // LAN/SIG Mesh 驱动未挂载时如实上报 down。
     let net_up = state::net_handle(&state).is_some();
     let net_peers = state::net_handle(&state)
         .map(|n| n.peers().len())
         .unwrap_or(0);
+    let ble_up = state.ble_up.load(std::sync::atomic::Ordering::SeqCst);
     Ok(Json(json!({
-        "ble": "down",
+        "ble": if ble_up { "up" } else { "down" },
         "lan": "down",
         "net": if net_up { "up" } else { "down" },
         "loopback": "up",

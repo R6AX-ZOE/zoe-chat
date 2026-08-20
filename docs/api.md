@@ -33,7 +33,7 @@
 | POST | `/api/v1/devices/:id/revoke` | 吊销设备 |
 | GET | `/api/v1/backup/mnemonic` | 生成助记词(需口令确认:`{password}`) |
 | POST | `/api/v1/restore` | 助记词恢复:`{mnemonic, password}` |
-| GET | `/api/v1/transports` | 各传输状态:ble/lan/net 是否可用、邻居数、打洞状态 |
+| GET | `/api/v1/transports` | 各传输状态:ble/lan/net 是否可用、邻居数(`net_peers`)、打洞状态。**移动端语义(2026-08-20)**:`loopback` 恒 up;`ble` = 宿主应用(回环桥)已连接(`AppState.ble_up`,开机自动 `start_bridge`),`lan`/`net`/`sigmesh` 移动端未挂载特征/驱动,如实 down |
 | POST | `/api/v1/settings` | 设置:明文缓存保留期、自建中继地址、自动启动、`ui_language` |
 
 错误:统一 `{"error": {"code": ..., "message": ...}}`,HTTP 语义映射(400/401/404/409/423/503)。
@@ -47,6 +47,7 @@
 - **创建用户**:`POST /users` 即时生效无需重启;新用户种子 = 随机 Ed25519 身份,即时以 PIN 加密写入注册表,**明文种子不落任何磁盘**。随后可经 `POST /users/:id/activate` 切换到新用户。
 - **set-pin**:仅对**激活且已解锁**的用户开放;为其它用户设置 PIN 返回 400("PIN can only be set for the active user in v1")。
 - **restore 限制**:`POST /restore`(助记词恢复)仅对 plain 用户开放;PIN 用户返回 400(恢复会覆盖身份与设备,须先在 CLI 层以 `default` 明文账号执行)。
+- **首次运行引导(2026-08-20,移动端)**:token 移除后 plain 默认用户无需登录直接进入应用(无锁屏)。Web UI 检测到"移动端(`can_switch=false`)+ 活跃用户为 plain + 注册表无 PIN 用户"时显示 OnboardView(设置设备 PIN 卡片),`set_pin` 后**当前会话保持解锁**,下次冷启动即进入锁定模式等待 PIN(见 docs/tauri-mobile.md 真机修复记录 2)。
 
 ## 2. WebSocket `/api/v1/events`
 

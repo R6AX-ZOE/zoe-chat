@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- (patch-android-gen.sh 覆盖)窗口背景 = webui 深色主题 --bg(#0f1216)。 -->
+<resources>
+    <color name="zoe_window_bg">#0F1216</color>
+</resources>

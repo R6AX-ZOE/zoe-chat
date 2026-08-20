@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- (patch-android-gen.sh 覆盖)亮色窗口:窗口背景与 webui 浅色主题一致,
+     状态栏/导航栏透明 + 深色图标(edge-to-edge,内容由页面 safe-area CSS 让位)。 -->
+<resources>
+    <style name="Theme.zoe_mobile" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/zoe_window_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

@@ -94,21 +94,28 @@ a { color: var(--accent); }
 /* ---------- 布局 ---------- */
 #app { height: 100%; }
 
+/* 移动端 edge-to-edge(viewport-fit=cover):状态栏/手势条 safe-area
+   顶栏下移避开状态栏;底栏/输入区上移避开手势条;桌面 env()=0 无影响。 */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+}
+
 .app {
   height: 100%;
   display: grid;
   grid-template-rows: auto 1fr;
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: var(--sab);
 }
 
 .app-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: calc(8px + var(--sat)) 12px 8px;
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
-  min-height: calc(var(--touch-min) + 8px);
+  min-height: calc(var(--touch-min) + 8px + var(--sat));
 }
 .app-header .brand {
   font-weight: 650;
@@ -255,7 +262,7 @@ a { color: var(--accent); }
 
 .thread-input {
   display: flex; gap: 8px;
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  padding: 10px 12px calc(10px + var(--sab));
   background: var(--bg-elev);
   border-top: 1px solid var(--border);
 }

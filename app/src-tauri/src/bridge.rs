@@ -40,6 +40,12 @@ pub(crate) struct BridgeStatus {
     last_error: Option<String>,
 }
 
+impl BridgeStatus {
+    pub(crate) fn is_connected(&self) -> bool {
+        self.connected
+    }
+}
+
 struct BridgeInner {
     state: Mutex<BridgeState>,
     last_error: Mutex<Option<String>>,

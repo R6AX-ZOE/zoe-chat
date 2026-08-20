@@ -410,6 +410,7 @@ pub async fn start(config: DaemonConfig) -> Result<Daemon, DaemonError> {
         pending_keypackages: Mutex::new(HashMap::new()),
         pairing: std::sync::atomic::AtomicBool::new(false),
         pair_code: Mutex::new(None),
+        ble_up: std::sync::atomic::AtomicBool::new(false),
         started_at: now(),
     });
 

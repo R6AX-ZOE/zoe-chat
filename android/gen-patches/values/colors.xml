@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- (patch-android-gen.sh 覆盖)窗口背景 = webui 浅色主题 --bg(#f4f6f9),
+     使 edge-to-edge 状态栏区域与页面底色一致(见 webui/static/styles.css :root[data-theme])。 -->
+<resources>
+    <color name="zoe_window_bg">#F4F6F9</color>
+</resources>

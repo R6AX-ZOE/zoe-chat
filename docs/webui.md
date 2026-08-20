@@ -10,13 +10,13 @@
 |---|---|
 | `Cargo.toml` / `Cargo.lock` | 独立 crate(自带 `[workspace]` 空表隔离根 workspace;**Cargo.lock 提交入库**) |
 | `src/lib.rs` | wasm 入口:`#[wasm_bindgen(start)]` + `console_error_panic_hook::set_once()` + **`mount_to(#app)`**(坑:挂 body 会被空 #app 占满视口,见 tauri-mobile.md 坑 20) |
-| `src/app.rs` | 组件:启动探测(无登录页) / 会话列表 / 消息线程(分页) / 群组详情(邀请·退群) / 设置(主题·语言·配对·设备·对端·名片·导入·备份恢复·网络·传输·**用户管理**) / **锁定屏(PIN 解锁)** / 新建群组对话框 / 头部导航(`+`/齿轮常驻) |
+| `src/app.rs` | 组件:启动探测(无登录页) / 会话列表 / 消息线程(分页) / 群组详情(邀请·退群) / 设置(主题·语言·配对·设备·对端·名片·导入·备份恢复·网络·传输·**用户管理**) / **锁定屏(PIN 解锁)** / **首次运行引导(OnboardView:移动端设置设备 PIN)** / 新建群组对话框 / 头部导航(`+`/齿轮常驻) |
 | `src/api.rs` | HTTP/WS 客户端:DTO;`request<T>` 统一解析;**响应一律显式 `Value`**(坑 19);`connect_events` WS 自动重连(2s);**无令牌**(无 Authorization 头,无 `tauri_boot_token`) |
 | `src/i18n.rs` | 键驱动词典,zh-CN/en-US 各 **145 键**,单测断言键集合一致(`key_sets_identical`) |
 | `src/theme.rs` | `data-theme` + `prefers-color-scheme` 跟随 + 手动切换;`watch_system` 用 `add_listener_with_opt_callback` |
 | `src/icons.rs` | 自绘 SVG 图标集(24×24,stroke 1.5,圆滑路径,**禁止 emoji**);svg 元素不支持 `inner_html`,以 `<span inner_html=完整svg字符串>` 注入 |
 | `static/index.html` | 外壳:CSS 链接 + `<div id="app">` + wasm 加载器(`import init from "/assets/zoe_webui.js"; await init("/assets/zoe_webui_bg.wasm")`) |
-| `static/styles.css` | CSS 变量主题(light/dark,WCAG AA);响应式断点 640/1024;`.nav-action` 头部导航(所有宽度可见) |
+| `static/styles.css` | CSS 变量主题(light/dark,WCAG AA);响应式断点 640/1024;`.nav-action` 头部导航(所有宽度可见);移动端 edge-to-edge:`--sat/--sab = env(safe-area-inset-*)`,顶栏/底栏让位状态栏与手势条(2026-08-20) |
 | `scripts/build.sh` / `build.ps1` | `cargo build --release --target wasm32-unknown-unknown` + wasm-bindgen → `dist/`;bindgen 版本**从 Cargo.lock 自锁**(`awk`/正则提取),加 `--no-typescript` |
 | `dist/` | **构建产物提交入库**(index.html + styles.css + assets/zoe_webui.js + zoe_webui_bg.wasm ~1.3MB);CI 校验与源码一致 |
 

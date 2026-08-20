@@ -111,7 +111,8 @@ jobs:
         working-directory: app
         run: |
           set -o pipefail
-          cargo tauri android build --apk --debug 2>&1 | tee /tmp/build.log
+          # release 构建(体积小;Tauri 默认以 debug keystore 签发,可侧载,无需单独签名配置)
+          cargo tauri android build --apk --release 2>&1 | tee /tmp/build.log
 
       - name: Verify APK
         run: |
@@ -129,7 +130,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: zoe-mobile-apk
-          path: app/src-tauri/gen/android/app/build/outputs/apk/universal/debug/*.apk
+          path: app/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
           if-no-files-found: error
 
       - name: Publish M1 report to ci/report

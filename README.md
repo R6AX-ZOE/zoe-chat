@@ -29,18 +29,25 @@
 
 ## 多用户与 PIN 保护
 
-单个守护进程可服务多个用户（每用户独立数据目录 `data_dir/users/<id>/`，含各自的 `zoe.db`/`mls.db`）：
+单个守护进程可服务多个用户（每用户独立数据目录 `data_dir/users/<id>/`，含各自的 `zoe.db`/`mls.db`；账号清单在 `data_dir/users.db`）：
 
-- 创建用户时设置 **PIN**；身份种子以 `argon2id(PIN) → ChaCha20-Poly1305` 加密落盘（`salt||nonce||ciphertext`），默认**不落明文种子**
-- 守护进程启动带 `--pin` 即解锁；否则以"锁定模式"启动（仅用户管理与解锁 API，其余返回 423）
-- 切换用户：`zoe-cli user activate <id>` 后重启守护进程（v1 约定）
-- 旧版明文数据自动迁移为 `default` 用户（无 PIN，可 `zoe-cli user set-pin` 补设）
+- 创建用户时设置 **PIN**；身份种子以 `argon2id(PIN) → ChaCha20-Poly1305` 加密落盘（`salt||nonce||ciphertext`），明文种子不落磁盘
+- 守护进程启动带 `--user <id> [--pin <pin>]` 即加载该账号；激活账号为 PIN 用户而 `--pin` 缺失时以**锁定模式**启动——仅用户管理/解锁 API 可用，其余返回 423，Web UI 显示锁定屏（输入 PIN 经 `POST /unlock` 解锁，不重启恢复会话）
+- 切换用户：`zoe-cli user activate <id>` 后重启守护进程（v1 约定，无运行时热切）
+- 旧版明文数据自动迁移为 `default` 用户（无 PIN，可 `zoe-cli user set-pin` 或 UI 设置页补设）
+- 用户管理 API：`GET/POST /users`（列表/创建）、`POST /users/:id/set-pin`（仅激活账号）、`POST /unlock`；详见 [docs/api.md](docs/api.md) §1.1 与 [docs/storage.md](docs/storage.md) §1.1
+- 移动端（Tauri）v1 保持单用户：内嵌 daemon 不带 `--user`；若账号为 PIN 用户则动态锁定，由 UI 锁定屏解锁
 
 ```sh
 # 管理用户（桌面）
 zoe-cli user list
 zoe-cli user add --name alice --pin 123456
 zoe-cli user activate <user_id>
+
+# 以指定账号启动（锁定模式示例）
+zoe-cli user list                    # 查 user_id
+cargo run -p zoe-daemon -- --data-dir zoe-data --user <id>          # PIN 用户 → 锁定，UI 输 PIN 解锁
+cargo run -p zoe-daemon -- --data-dir zoe-data --user <id> --pin 123456   # 直接解锁
 ```
 
 ## 构建与运行
@@ -58,7 +65,7 @@ cargo test -p zoe-transport --features ble-windows   # Windows 下含 BLE mock �
 cargo run -p zoe-cli -- demo        # M0 双节点 loopback 演示
 
 cargo run -p zoe-daemon -- --data-dir zoe-data
-cargo run -p zoe-daemon -- --data-dir zoe-data --pin 123456   # 锁定模式需要 PIN 解锁
+cargo run -p zoe-daemon -- --data-dir zoe-data --user <id> --pin 123456   # PIN 用户直接解锁；不带 --pin 则进入锁定模式
 # 启动后浏览器打开输出的 http://127.0.0.1:<port>，输入访问令牌
 # 双设备互通：一台在 UI 设置页复制"监听地址"发给对方 → 对方在群组详情页粘贴邀请
 # 可选参数：--port N(固定端口)、--token STR(指定令牌)
@@ -66,12 +73,12 @@ cargo run -p zoe-daemon -- --data-dir zoe-data --pin 123456   # 锁定模式需�
 
 ## 移动端（Android）
 
-完整设计与验收流程见 [docs/tauri-mobile.md](docs/tauri-mobile.md)。CI 产出 debug APK（GitHub Actions → `Android Tauri Build` → artifact）：
+完整设计与验收流程见 [docs/tauri-mobile.md](docs/tauri-mobile.md)。CI 产出 release APK（GitHub Actions → `Android Tauri Build` → artifact，Tauri 默认 debug keystore 签名，可侧载）：
 
 ```sh
 # 本地构建（需 Android SDK；gen/android 由 CI 生成，本地用 npx tauri android init）
 cd app
-npx tauri android build --apk --debug
+npx tauri android build --apk --release
 ```
 
 ## BLE 真机联调（Termux）

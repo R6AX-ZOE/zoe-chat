@@ -10,9 +10,9 @@
 |---|---|
 | `Cargo.toml` / `Cargo.lock` | 独立 crate(自带 `[workspace]` 空表隔离根 workspace;**Cargo.lock 提交入库**) |
 | `src/lib.rs` | wasm 入口:`#[wasm_bindgen(start)]` + `console_error_panic_hook::set_once()` + **`mount_to(#app)`**(坑:挂 body 会被空 #app 占满视口,见 tauri-mobile.md 坑 20) |
-| `src/app.rs` | 组件:登录 / 会话列表 / 消息线程(分页) / 群组详情(邀请·退群) / 设置(主题·语言·配对·设备·对端·名片·导入·备份恢复·网络·传输) / 新建群组对话框 / 头部导航(`+`/齿轮常驻) |
+| `src/app.rs` | 组件:登录 / 会话列表 / 消息线程(分页) / 群组详情(邀请·退群) / 设置(主题·语言·配对·设备·对端·名片·导入·备份恢复·网络·传输·**用户管理**) / **锁定屏(PIN 解锁)** / 新建群组对话框 / 头部导航(`+`/齿轮常驻) |
 | `src/api.rs` | HTTP/WS 客户端:DTO + Bearer token;`request<T>` 统一解析;**响应一律显式 `Value`**(坑 19);`tauri_boot_token()` 移动端令牌引导;`connect_events` WS 自动重连(2s) |
-| `src/i18n.rs` | 键驱动词典,zh-CN/en-US 各 **113 键**,单测断言键集合一致(`key_sets_identical`) |
+| `src/i18n.rs` | 键驱动词典,zh-CN/en-US 各 **147 键**,单测断言键集合一致(`key_sets_identical`) |
 | `src/theme.rs` | `data-theme` + `prefers-color-scheme` 跟随 + 手动切换;`watch_system` 用 `add_listener_with_opt_callback` |
 | `src/icons.rs` | 自绘 SVG 图标集(24×24,stroke 1.5,圆滑路径,**禁止 emoji**);svg 元素不支持 `inner_html`,以 `<span inner_html=完整svg字符串>` 注入 |
 | `static/index.html` | 外壳:CSS 链接 + `<div id="app">` + wasm 加载器(`import init from "/assets/zoe_webui.js"; await init("/assets/zoe_webui_bg.wasm")`) |
@@ -54,6 +54,7 @@ git diff --exit-code -- webui/dist                # dist 新鲜度(CI 双 workfl
 
 - **Android WebView**:`window.prompt` 不可靠 → 建群用内联对话框;`window.confirm` 行为待真机确认
   (如不可用改内联确认);`http://127.0.0.1` 明文需 manifest `usesCleartextTraffic="true"(仅回环)`。
+- **锁定屏与用户管理(2026-08-20)**:激活用户为 PIN 且守护进程未带 `--pin` 启动时,UI 进入锁定态——所有非放行请求返回 423,前罩显示 **LockView**(单输入 PIN 窗体);提交走 `POST /unlock`(api.rs `unlock()`),失败提示 `lock.error`,成功即刷新为完整应用。设置页新增 **UsersPanel**(`settings.users`):列表现有用户(PIN 标记)、创建用户(`users.create`)、为激活的 plain 用户设置 PIN(`users.setPin`);创建后按提示重启 daemon 并以 `--user`/`--pin` 启动。新建用户/设置 PIN 均有 i18n(18 新键 ×2)。
 - **i18n**:新增文案须同时加 zh-CN 与 en-US 键(键集合一致由单测 + CI 强制)。
 - **源码编码**:所有 .rs/.html/.css 必须为 UTF-8;**严禁用 PS 5.1 默认编码的 Get-Content/Set-Content 批量改**
   (GBK 往返损坏非 ASCII,见 tauri-mobile.md 坑 18)。

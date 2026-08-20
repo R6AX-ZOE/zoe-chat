@@ -7,6 +7,10 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/v1/me` | 本机身份:user_id、指纹、设备列表、created_at |
+| GET | `/api/v1/users` | 用户列表(注册表):`{users:[{id,name,kind,created_at,last_used,active}]}`,`kind`=`plain`|`pin` |
+| POST | `/api/v1/users` | 创建用户:`{name, pin}`(PIN ≥4 位);数据落 `users/<id>/`,种子立即加密、不落明文 |
+| POST | `/api/v1/users/:id/set-pin` | 为激活的 plain 用户设置 PIN:`{pin}`;v1 仅允许激活用户 |
+| POST | `/api/v1/unlock` | 锁定模式解锁:`{pin}`;验证通过后恢复身份/会话/网络 |
 | POST | `/api/v1/pair/start` | 进入配对模式;返回 `{pair_code, bt_advertising: bool}` |
 | POST | `/api/v1/pair/stop` | 退出配对模式 |
 | POST | `/api/v1/pair/verify` | 带外验证:`{peer_id, ok: bool}`(比对指纹结果) |
@@ -31,7 +35,17 @@
 | GET | `/api/v1/transports` | 各传输状态:ble/lan/net 是否可用、邻居数、打洞状态 |
 | POST | `/api/v1/settings` | 设置:明文缓存保留期、自建中继地址、自动启动、`ui_language` |
 
-错误:统一 `{"error": {"code": ..., "message": ...}}`,HTTP 语义映射(400/401/404/409/503)。
+错误:统一 `{"error": {"code": ..., "message": ...}}`,HTTP 语义映射(400/401/404/409/423/503)。
+
+## 1.1 多用户注册表与锁定模式
+
+- **用户注册表**:`data_dir/users.db` 记录全部用户(见 docs/storage.md §1.1)。每用户运行数据独立目录 `users/<id>/`(各自 `zoe.db`/`mls.db`);`kind=plain` 为无 PIN 用户(含从旧版明文迁移的 `default`),`kind=pin` 的种子以 PIN 派生密钥加密落盘。
+- **锁定模式**:激活用户为 `pin` 且守护进程启动未带 `--pin` 时进入锁定态。锁定期间仅放行 `GET /`、`/users`、`/users/*` 与 `/unlock`(以及 `/status`),其余端点一律 **423 Locked**。
+- **解锁**:`POST /unlock` 提交 PIN → 注册表 `verify_pin` → 恢复激活用户的身份/设备/MLS 会话/网络栈;成功后锁定态解除,后续请求恢复。PIN 校验失败返回 400。
+- **切换用户**:v1 约定为 CLI `zoe-cli user activate <id>` 后重启守护进程(`--user <id> [--pin <pin>]`);HTTP 不提供账号切换。
+- **创建用户**:`POST /users` 即时生效无需重启;新用户种子 = 随机 Ed25519 身份,即时以 PIN 加密写入注册表,**明文种子不落任何磁盘**。注册表标记为待激活,重启 daemon 指定 `--user <id> [--pin <pin>]` 后成为激活用户。
+- **set-pin**:仅对**激活且已解锁**的 plain 用户开放;为其它用户设置 PIN 返回 400("PIN can only be set for the active user in v1")。
+- **restore 限制**:`POST /restore`(助记词恢复)仅对 plain 用户开放;PIN 用户返回 400(恢复会覆盖身份与设备,须先在 CLI 层以 `default` 明文账号执行)。
 
 ## 2. WebSocket `/api/v1/events`
 
@@ -43,6 +57,7 @@
 {"type":"peer",      "peer_id":..., "state":"paired|verified|blocked|offline|online"}
 {"type":"group",     "group_id":..., "event":"created|joined|member_added|member_removed|coordinator_offline"}
 {"type":"transport", "transport":"ble|lan|net", "state":"up|down", "detail":...}
+{"type":"user",      "user_id":..., "event":"created|pin_set"}
 ```
 
 - 心跳:客户端每 30s `{"type":"ping"}`,服务端 `pong`,60s 无响应断开。
@@ -55,7 +70,7 @@
 - UI 无框架:Leptos → wasm(去 npm/tsc/vite),构建产物 < 2MB wasm + 小 js 胶水。
 - **消息内容与文件**:文本消息明文为裸 UTF-8;文件消息为结构化二进制(`0x02 0x01 | name | size | mime | data`,见 `crates/zoe-core/src/content.rs`),大小 ≤ 8 MiB。接收端解密后 ≤ 1 MiB 的小文件**自动落盘**到 `data_dir/files/` 并标记 `file_downloaded`;大文件点击"下载"时经 `GET /files/:msg_hash` 落盘并提供浏览器下载。
 - **单聊(私聊)**:与联系人的单聊 = 双人 MLS 群,`groups.direct_peer` 记录对端 libp2p peer id;发送时信封只定向投递给对端(不广播)。联系人表 `net_peer_id` 记录 libp2p 标识 ↔ zoe peer_id 映射,`/directs` 返回该映射供 UI 从联系人直接打开已有单聊。
-- **多语言(i18n)**:UI 文案走客户端目录 `locales/{zh-CN,en-US}.json`;语言优先级 = 用户设置(`settings.ui_language`)> `navigator.language` > 默认 en-US。服务端不参与翻译:API 只返回数据与错误码,文案由客户端映射,切换即时生效、无需重启。键集合完整性由 CI 校验(见 docs/modules.md §4)。
+- **多语言(i18n)**:UI 文案走 `webui/src/i18n.rs` 键驱动词典(zh-CN/en-US 各 147 键,无外部 json);语言优先级 = 用户设置(`settings.ui_language`)> `navigator.language` > 默认 en-US。服务端不参与翻译:API 只返回数据与错误码,文案由客户端映射,切换即时生效、无需重启。键集合完整性由单测 + CI 校验(见 docs/modules.md §4)。
 - **消息内容**:任意 UTF-8 明文,协议层无语言限制(中文/emoji/RTL 均可);RTL 渲染为 UI 层 CSS 职责(`dir` 属性),与服务端无关。
 - **主题(深色/浅色)**:CSS 变量主题体系,`<html data-theme="light|dark">` 切换;默认跟随 `prefers-color-scheme`,用户选择持久化于 `settings.ui_theme`;对比度按 WCAG AA 校验。
 - **图标**:统一自绘 SVG 图标集(24×24 viewBox,stroke 1.5px,圆角线帽/线接、平滑曲线路径),打包为内联 sprite;**禁止使用 emoji 作图标**(渲染差异、无障碍、严肃性);装饰图标 `aria-hidden`,功能图标配可访问文本。

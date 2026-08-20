@@ -130,15 +130,16 @@ MLS 协议假定一个提供**全序**的投递服务(DS):所有提案/提交按
 
 - 守护进程:常驻、开机自启(可选),监听 `127.0.0.1:随机端口`,首次启动生成 token,浏览器访问需携带 token(防本机其他进程/网页跨站调用)。
 - UI:**Rust 编写(Leptos CSR → wasm32-unknown-unknown),零 JS/TS 工具链**(npm/tsc/vite 全部移除;wasm-bindgen 胶水 ~5KB 属运行机制)。产物 `webui/dist`(index.html + styles.css + zoe_webui.js + zoe_webui_bg.wasm)由 zoe-daemon **编译期内嵌并服务**;构建 = `cargo build --target wasm32-unknown-unknown` + wasm-bindgen(`webui/scripts/build.sh|.ps1`),CI 校验提交的 dist 与源码一致。
-- 功能:会话列表、消息流(分页)、QR 指纹验证、配对模式、设备管理(吊销)、密钥备份/恢复(助记词)、对端阻止/带外验证、传输状态指示(BLE/局域网/互联网/SIG Mesh)。界面文案走 i18n 键目录(zh-CN/en-US 各 113 键,CI 校验键集合一致,见 webui/src/i18n.rs)。样式:深色/浅色主题(默认跟随系统,可手动切换);图标统一自绘圆滑路径 SVG,**禁止 emoji 作图标**;移动优先响应式(移动端单栏 / 桌面三栏;<1024px 设置视图占满主区域,顶栏 `+`/齿轮入口所有宽度可见)。构建/开发/平台注意详见 [docs/webui.md](docs/webui.md)。
+- 功能:会话列表、消息流(分页)、QR 指纹验证、配对模式、设备管理(吊销)、密钥备份/恢复(助记词)、对端阻止/带外验证、传输状态指示(BLE/局域网/互联网/SIG Mesh)、**多用户管理(创建 PIN 用户 / 设置 PIN)与锁定屏(PIN 解锁)**。界面文案走 i18n 键目录(zh-CN/en-US 各 147 键,CI 校验键集合一致,见 webui/src/i18n.rs)。样式:深色/浅色主题(默认跟随系统,可手动切换);图标统一自绘圆滑路径 SVG,**禁止 emoji 作图标**;移动优先响应式(移动端单栏 / 桌面三栏;<1024px 设置视图占满主区域,顶栏 `+`/齿轮入口所有宽度可见)。构建/开发/平台注意详见 [docs/webui.md](docs/webui.md)。
 - **移动端(Tauri)**:内嵌守护进程(`zoe-daemon` lib,`default-features=false` 排除 libp2p),固定端口 `127.0.0.1:18571`,WebView 加载该地址(同源免 CORS);令牌经 `zoe_boot_token` tauri command 引导;同一份 UI 产物与桌面共用(见 docs/tauri-mobile.md §0)。
 - 所有密钥操作在守护进程内完成,浏览器只拿渲染数据;UI 通过本地 HTTP + WebSocket(仅本机)与守护进程通信。
 
 ## 8. 存储与备份
 
 - SQLite(WAL):消息**密文**持久化;为流畅渲染可缓存已解密明文(标记为本地明文,可选清除)。
+- **多用户注册表**:`data_dir/users.db`(users 表)记录全部用户;每用户独立数据目录 `users/<id>/`(各自 `zoe.db`/`mls.db`),激活时仅打开该账号数据集。PIN 用户种子以 `argon2id(PIN)` 派生密钥加密(`salt||nonce||ciphertext`,XChaCha20-Poly1305)存入注册表,**明文种子不落盘**;校验串亦为 argon2id PHC(恒时比较)。明文种子仅存在于旧版迁移的 `default`/plain 账号(可 `set-pin` 升级)。详见 docs/storage.md §1.1 与 docs/api.md §1.1。
 - 设备密钥:文件权限 0600;可选用户口令派生密钥(argon2)加密存储。
-- 备份/恢复:24 词助记词恢复用户身份密钥;设备间信任关系通过重新扫码授权重建;群组会话历史随设备重建(从群内其他成员处同步密文)。
+- 备份/恢复:24 词助记词恢复用户身份密钥;设备间信任关系通过重新扫码授权重建;群组会话历史随设备重建(从群内其他成员处同步密文)。助记词恢复仅对 plain 账号开放(PIN 用户须先回退明文账号)。
 
 ## 9. 性质清单对照
 
@@ -162,7 +163,7 @@ MLS 协议假定一个提供**全序**的投递服务(DS):所有提案/提交按
 ## 10. 里程碑
 
 - **M0(骨架验证)✅**:仓库骨架、身份层、openmls 集成、loopback 传输(内存通道)、CLI 验证双人消息 + 群组 + update。
-- **M1(产品外壳)✅**:守护进程 + Web UI(docs/api.md 全量端点已实现):会话、消息分页、指纹 QR 验证/带外验证流程、配对模式、对端阻止、设备管理(吊销)、助记词备份**与恢复**、传输状态指示(含 SIG Mesh);CI 双平台构建(Linux/Windows)。**2026-08-19:UI 以 Rust 重写(Leptos → wasm,去 npm/tsc/vite),桌面与 Tauri 移动端共用同一份产物**;真机/浏览器实测修复:登录解析、布局挂载、窄窗口入口、建群对话框、源码编码(见 §7、docs/webui.md §5 与 docs/tauri-mobile.md 坑 18-20)。
+- **M1(产品外壳)✅**:守护进程 + Web UI(docs/api.md 全量端点已实现):会话、消息分页、指纹 QR 验证/带外验证流程、配对模式、对端阻止、设备管理(吊销)、助记词备份**与恢复**、传输状态指示(含 SIG Mesh);CI 双平台构建(Linux/Windows)。**2026-08-19:UI 以 Rust 重写(Leptos → wasm,去 npm/tsc/vite),桌面与 Tauri 移动端共用同一份产物**;真机/浏览器实测修复:登录解析、布局挂载、窄窗口入口、建群对话框、源码编码(见 §7、docs/webui.md §5 与 docs/tauri-mobile.md 坑 18-20)。**2026-08-20:多用户注册表 + PIN 保护加成 M1**(users.db 注册表、`argon2id` 校验 + 加密种子、锁定模式/423 门禁、`POST /unlock`、`/users` 用户管理 API、CLI `user list|add|set-pin|activate`、daemon `--user/--pin`、webui 锁定屏 + 设置页 UsersPanel + 18×2 新 i18n 键;详见 §7/§8、docs/api.md §1.1、docs/storage.md §1.1)。
 - **M2(近场)✅(驱动待真机验证)**:`BleDriver` trait + `MeshOverlay` 存储转发覆盖网(分片/重组、去重、TTL)全部以 mock 驱动测试通过;bluer(Linux)与 btleplug+windows-rs(Windows)驱动已编写并通过编译验证。已知限制:Windows 广告角色受 SDK 绑定限制暂不可用(Windows 以 central 身份连出);GATT server 角色(被连接方)Windows 待 M2.5。真机联调需蓝牙硬件。
 - **M3(远程)✅**:libp2p 远程通道:手动 Peer ID 交换 + mDNS 局域网发现 + DCUtR 打洞(noise 用身份密钥,与 QR 名片同钥);守护进程消息核心(入站分发/KeyPackage 交换/邀请流程/消息路由);**双守护进程 E2E 通过**:建群 → 邀请 → 双向加密消息,双方群组状态一致(epoch/members)。
 - **M2(近场)**:BLE GATT 网状覆盖网,**Linux 先行**,`BleDriver` trait 定稿;多节点存储转发;Windows BLE 驱动紧随补齐(全功能对等目标)。
@@ -179,6 +180,8 @@ MLS 协议假定一个提供**全序**的投递服务(DS):所有提案/提交按
 - **Q7 Windows 范围(已定)**:全功能对等,含 BLE 近场;Windows 驱动 M2 紧随 Linux 验证后补齐;Android/Termux 远期可选。
 - **Q8 开发环境(已定)**:Windows 原生开发,CI(GitHub Actions)出 Linux 产物。
 - **Q9 UI 多语言(已定)**:目录驱动 i18n,首发 zh-CN + en-US 可扩展;界面语言纯客户端渲染,不进入协议/密文(见 docs/api.md §3);消息内容任意 UTF-8,无语言限制。
+- **Q10 多用户形态(已定,2026-08-20)**:单守护进程注册表承担多账号(users.db),每用户独立数据目录 `users/<id>/`;**切换账号 = 重启 daemon 指定 `--user`**(v1 约定;不提供运行时热切,避免复制共享会话/网络栈的复杂度)。PIN 用户种子只以加密形式存注册表,明文不落盘。
+- **Q11 锁定模式语义(已定,2026-08-20)**:PIN 用户缺 `--pin` 启动即以锁定态运行——仅 `/users`、`/users/*`、`/unlock`、`/status` 放行,其余 423(HTTP 以 423 表达"已锁定",区别于 401 未认证);解锁(PIN 校验)后恢复身份/MLS 会话/网络,不重启不丢运行状态。webui 锁定态显示 LockView 锁屏(见 docs/webui.md §4)。
 
 **剩余开放问题**:
 - **Q5 许可证**:开源许可证选择(AGPL-3.0 / Apache-2.0 / MIT 等)。

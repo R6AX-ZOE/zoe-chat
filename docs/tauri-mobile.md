@@ -30,6 +30,7 @@
 - **webui/ 为独立 crate（`zoe-webui`）**：Leptos 0.7 CSR → `wasm32-unknown-unknown`，`scripts/build.sh|.ps1` 产出 `dist/`（index.html + styles.css + assets/zoe_webui.js + zoe_webui_bg.wasm）。**dist 与 webui/Cargo.lock 提交入库**（zoe-daemon 编译期 `include_str!/include_bytes!` 内嵌），CI 校验 dist 与源码一致（不一致 → 有网络机器跑 build 脚本后提交）。独立于根 workspace（自带 Cargo.lock；`cargo test --manifest-path webui/Cargo.toml` 跑原生单测，含 i18n 键集合一致性）。
 - **zoe-daemon 拆 lib + bin**：`crates/zoe-daemon/src/lib.rs` 导出 `start(DaemonConfig)`（建库/身份/会话恢复/net 传输/axum 启动）；bin 为薄壳（参数解析 + 打印）。`net` feature 可选：桌面默认开，移动端 `default-features = false` 排除 libp2p。
 - **移动端启动顺序（lib.rs setup）**：① 生成随机令牌 → ② `zoe_daemon::start(DaemonConfig::mobile(data_dir, token))`（`tauri::async_runtime::block_on`，固定端口 18571，绑 127.0.0.1）→ ③ 创建 WebView（`WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))`，先起服务后建窗口，无竞态）。config 里 `app.windows: []`（避免 tauri 先建窗口加载空地址）。
+- **多用户与锁定（2026-08-20 定稿）**：`DaemonConfig::mobile` 不带 `--user/--pin`，按注册表激活账号运行；v1 移动端保持**单用户**（无账号切换入口）。激活账号为 PIN 用户时进入锁定模式（其余 API 423），Web UI 显示锁定屏，`POST /unlock` 输 PIN 解锁——桌面与移动端共用同一锁定/解锁逻辑与 UI。
 - **令牌引导**：UI 启动时若无本地令牌 → `window.__TAURI_INTERNALS__.invoke("zoe_boot_token")`（wasm 内 js_sys Reflect 调用，api.rs `tauri_boot_token`）；桌面浏览器无该环境 → 手动登录页。
 - **Android cleartext**：`android/gen-patches/AndroidManifest.xml` 的 application 硬编码 `android:usesCleartextTraffic="true"`（仅回环 127.0.0.1）。
 - **构建管线**：android-tauri.yml 与 ci.yml **不再使用 npm/Node**；tauri CLI 经 `cargo install tauri-cli`。wasm-bindgen-cli 版本 = webui/Cargo.lock 中 wasm-bindgen 版本（脚本自动提取）。
@@ -368,7 +369,7 @@ crates/zoe-cli/src/ble.rs            # 小改:--send-env 与收包重组打印(�
 - **结果回传**：GitHub API 在沙箱不可达，CI 把结果（job 状态 + badging + sha256 + 失败时构建日志尾部）
   提交到 **`ci/report`** 分支（force push），本地 `git fetch origin ci/report` 即可验收；
   artifact 名 `zoe-mobile-apk`（Actions 页下载）。
-- cargo 命令**均不用 `--locked`**（沿用坑 6）；`--apk --debug` 出通用 APK（release 签名后续再配）。
+- cargo 命令**均不用 `--locked`**（沿用坑 6）；CI 以 `--apk --release` 出通用 APK（Tauri 默认 debug keystore 签名，可侧载；正式签名另配 keystore 后再启用）。
 
 ## 关键坑（实测结论，勿重走）
 

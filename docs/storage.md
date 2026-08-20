@@ -86,6 +86,28 @@ CREATE TABLE transport_state (
 );
 ```
 
+## 1.1 用户注册表(users.db)
+
+多用户引入后,数据目录含两处持久化:**根目录 `users.db`(注册表)** + **每用户独立子目录 `users/<id>/`**(各自 `zoe.db`/`mls.db`/`token`)。用户切换 = 指定 `--user <id>`,运行时只开该账号的数据集。旧版明文数据迁移为 `default` 用户(`kind=plain`,`dir` 指向原数据目录,子目录布局不回溯迁移文件)。
+
+```sql
+CREATE TABLE users (
+  user_id      TEXT PRIMARY KEY,  -- 8 字节十六进制(Ed25519 身份的 user_id)
+  name         TEXT NOT NULL,
+  kind         TEXT NOT NULL,     -- 'plain' | 'pin'
+  dir          TEXT NOT NULL,     -- 运行时数据子目录,如 users/<id>/
+  seed_enc     BLOB,              -- PIN 用户:salt||nonce||ciphertext(种子密文);plain 用户为 NULL
+  pin_verifier BLOB,              -- PIN 用户:argon2id PHC 串(校验用,不存 PIN 明文);plain 用户为 NULL
+  created_at   INTEGER NOT NULL,
+  last_used    INTEGER NOT NULL   -- 最近激活时间;CLI activate 会更新
+);
+```
+
+- **PIN 派生**:`argon2id(PIN)` 分别派生两路——① 校验串(`password_hash` PHC 格式,恒时比较),② 种子加密密钥(KDF 盐随机 16B,密文格式 `salt||nonce(12)||ciphertext`,XChaCha20-Poly1305,见 `crates/zoe-core/src/storage.rs` `encrypt_seed`/`decrypt_seed`)。
+- **明文种子零落盘**:新建 PIN 用户种子 = 随机 Ed25519 身份,仅以密文存 `users.db`;用户 `zoe.db` 的 `meta` 表写入 `seed_enc=1` 标记("种子已迁出注册表持有"),此后该用户的身份读取一律走注册表解密,不再写回明文。
+- **set-pin 路径**:CLI/API 以激活用户运行时身份种子重新加密 → 原子更新 `seed_enc`+`pin_verifier`+`kind='pin'`,写入独立事务。
+- 备份范围不变:仅身份助记词(登录 `default` 明文账号使用);PIN 用户密钥不随助记词备份(优先恢复为明文账号,需要时可对恢复的账号 set-pin)。
+
 ## 2. openmls 持久化
 
 - openmls 提供 `StorageProvider` 抽象(KeyPackage/群组状态/PSK 等)。

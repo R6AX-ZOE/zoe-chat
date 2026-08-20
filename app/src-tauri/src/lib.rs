@@ -15,6 +15,7 @@ use zoe_daemon::DaemonConfig;
 use zoe_transport::ble::{frame_chunks, parse_frame};
 
 mod bridge;
+mod relaunch;
 
 /// 内嵌守护进程句柄(managed state)。
 pub struct EmbeddedDaemon {
@@ -26,16 +27,21 @@ pub struct EmbeddedDaemon {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            // 1) 内嵌守护进程:数据目录 = 应用数据目录;固定端口;移动端模式
+            // 1) 内嵌守护进程:数据目录 = 应用数据目录;固定端口;移动端模式。
+            //    注册系统命令钩子:Web UI 经 POST /api/v1/system/restart 触发
+            //    (前端"重启服务"入口,Android 冷启动 App)。
             let data_dir = app
                 .path()
                 .app_data_dir()
                 .map_err(|e| format!("app data dir: {e}"))?;
             std::fs::create_dir_all(&data_dir).map_err(|e| format!("mkdir: {e}"))?;
-            let daemon = tauri::async_runtime::block_on(zoe_daemon::start(DaemonConfig::mobile(
-                data_dir,
-            )))
-            .map_err(|e| format!("embedded daemon start: {e}"))?;
+            let mut config = DaemonConfig::mobile(data_dir);
+            config.system_hook = Some(std::sync::Arc::new(|cmd| match cmd {
+                "restart" => relaunch::app_restart(),
+                other => Err(format!("unknown system command: {other}")),
+            }));
+            let daemon = tauri::async_runtime::block_on(zoe_daemon::start(config))
+                .map_err(|e| format!("embedded daemon start: {e}"))?;
             let daemon_state = daemon.state.clone();
             app.manage(EmbeddedDaemon {
                 state: daemon.state,

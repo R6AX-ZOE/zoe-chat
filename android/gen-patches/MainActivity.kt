@@ -1,6 +1,7 @@
 package com.zoechat.mobile
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
@@ -22,5 +23,34 @@ class MainActivity : TauriActivity() {
     }
     requestPermissions(perms, 100)
     Bridge.start(this)   // 桥生命周期=进程生命周期(坑 10,不用前台 Service)
+    attach(this)
+  }
+
+  companion object {
+    @Volatile private var current: MainActivity? = null
+
+    fun attach(activity: MainActivity) {
+      current = activity
+    }
+
+    /**
+     * 前端"重启服务"命令入口(由 Rust relaunch.rs 经 JNI 调用,无参静态方法):
+     * 重建 Activity + 杀进程冷启动。冷启动后内嵌守护进程以 PIN 用户无 --pin
+     * 启动 → 锁定模式 → Web UI 直接显示锁定屏。
+     */
+    @JvmStatic
+    fun restartApp() {
+      val a = current
+      if (a != null) {
+        a.runOnUiThread {
+          a.startActivity(
+            Intent(a, MainActivity::class.java)
+              .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK)
+          )
+        }
+      }
+      // 重建 intent 已交给系统后结束本进程(标准冷启动方式)
+      android.os.Process.killProcess(android.os.Process.myPid())
+    }
   }
 }

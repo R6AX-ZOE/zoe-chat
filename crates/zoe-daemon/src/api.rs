@@ -984,6 +984,26 @@ async fn transports(State(state): State<SharedState>) -> ApiResult {
 }
 
 // ---------------------------------------------------------------------------
+// 系统命令(宿主钩子,仅内嵌场景):重启应用/重连服务
+// ---------------------------------------------------------------------------
+
+/// 前端"重启服务"入口:调用宿主注册的钩子(移动端 → 重建 MainActivity 冷启动,
+/// 冷启动后 PIN 用户进入锁定模式 → 立即见锁定屏)。桌面无钩子 → 404。
+/// 放在 locked_gate 之外:锁定态下也允许重启(重启不改变锁定态,无安全风险)。
+async fn system_restart(State(state): State<SharedState>) -> ApiResult {
+    let Some(hook) = state.system_hook.as_ref() else {
+        return Err(ApiError::NotFound(
+            "system commands not registered (desktop daemon)".to_string(),
+        ));
+    };
+    hook("restart").map_err(ApiError::Internal)?;
+    Ok(Json(json!({
+        "ok": true,
+        "note": "restart requested",
+    })))
+}
+
+// ---------------------------------------------------------------------------
 // 网络(M3):地址查询、拨号、邀请
 // ---------------------------------------------------------------------------
 
@@ -1133,6 +1153,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/", get(index))
         .route("/assets/{file}", get(asset))
         .nest("/api/v1", protected)
+        .route("/api/v1/system/restart", post(system_restart))
         .with_state(state)
 }
 

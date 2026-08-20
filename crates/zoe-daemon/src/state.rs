@@ -52,6 +52,8 @@ pub struct AppState {
     /// 移动端 BLE 桥状态(内嵌守护进程由宿主 Tauri 应用轮询回写;
     /// 桌面无桥,恒 false → transports 如实上报 down)。
     pub ble_up: AtomicBool,
+    /// 系统级命令钩子(仅内嵌宿主注册;桌面 None)。
+    pub system_hook: Option<Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>>,
     pub started_at: i64,
 }
 

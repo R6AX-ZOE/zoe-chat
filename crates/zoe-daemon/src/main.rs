@@ -72,6 +72,7 @@ async fn run(args: Args) {
         user_id: args.user_id.clone(),
         pin: args.pin.clone(),
         mobile: false,
+        system_hook: None,
     })
     .await
     .expect("daemon start");

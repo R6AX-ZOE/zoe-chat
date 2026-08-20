@@ -43,7 +43,6 @@ pub const MOBILE_PORT: u16 = 18571;
 /// 桌面端口持久化文件(data_dir/port;仅桌面模式使用)。
 pub const PORT_FILE: &str = "port";
 
-#[derive(Debug, Clone)]
 pub struct DaemonConfig {
     pub data_dir: PathBuf,
     /// 0 = 随机端口(桌面默认;首次绑定后写入 data_dir/port,重启复用)。
@@ -54,6 +53,9 @@ pub struct DaemonConfig {
     pub pin: Option<String>,
     /// 移动端内嵌模式(禁用户切换;端口固定 MOBILE_PORT;不做自重启)。
     pub mobile: bool,
+    /// 系统级命令回调(仅内嵌宿主注册):`restart` → 宿主重建进程(移动端冷启动)。
+    /// 桌面 CLI 恒 None,`POST /api/v1/system/restart` 返回 404。
+    pub system_hook: Option<Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>>,
 }
 
 impl DaemonConfig {
@@ -64,6 +66,7 @@ impl DaemonConfig {
             user_id: None,
             pin: None,
             mobile: false,
+            system_hook: None,
         }
     }
 
@@ -80,6 +83,7 @@ impl DaemonConfig {
             user_id: None,
             pin: None,
             mobile: true,
+            system_hook: None,
         }
     }
 }
@@ -411,6 +415,7 @@ pub async fn start(config: DaemonConfig) -> Result<Daemon, DaemonError> {
         pairing: std::sync::atomic::AtomicBool::new(false),
         pair_code: Mutex::new(None),
         ble_up: std::sync::atomic::AtomicBool::new(false),
+        system_hook: config.system_hook.clone(),
         started_at: now(),
     });
 

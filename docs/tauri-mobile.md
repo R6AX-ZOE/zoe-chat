@@ -68,6 +68,13 @@
    后台任务每 2s 轮询 `bridge_status().connected` 回写 daemon `AppState.ble_up`
    （`state::set_ble_up`,变化时发 WS `transport` 事件,UI 传输点即时刷新）。桥连上 = `ble: up`
    （物理链路可用,广播已起;帧→MeshOverlay 仍是 M2 未接线,见"已知限制"）。
+4. **前端重启服务（2026-08-20）**：Web UI 无法直接重启(WS 断开即无法收指令),走 **daemon HTTP 钩子**——
+   `POST /api/v1/system/restart`（路由在锁定门**之外**）→ `DaemonConfig.system_hook` 回调（仅内嵌宿主注册,桌面 None→404）
+   → `app/src-tauri/src/relaunch.rs` **JNI** 调 `MainActivity.restartApp()`（Kotlin companion:runOnUiThread 重建
+   Activity FLAG_CLEAR_TASK|NEW_TASK + killProcess 冷启动;JNI 依赖 `jni`/`ndk-context` 仅 android target 编译,
+   `[target.'cfg(target_os = "android")'.dependencies]`;类引用用**活动对象运行时类**,不用 find_class 避免
+   AppClassLoader 问题）。冷启动后内嵌守护进程以 PIN 用户无 --pin 启动 → 锁定模式 → 锁定屏立即出现
+   （首次引导 OnboardView 的"立即重启(进入锁定屏)"按钮与 设置→系统→重启服务 共用 `api::system_restart`）。
 
 ## 目标
 

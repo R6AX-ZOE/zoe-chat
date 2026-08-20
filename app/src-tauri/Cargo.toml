@@ -27,5 +27,11 @@ zoe-transport = { path = "../../crates/zoe-transport", default-features = false,
 # 内嵌守护进程(Web UI + HTTP/WS API):lib 化 zoe-daemon,关闭 net(libp2p)
 zoe-daemon = { path = "../../crates/zoe-daemon", default-features = false }
 
+# 系统重启命令(relaunch.rs):仅 Android 目标生效 —— JNI 调 MainActivity.restartApp
+# (重建 Activity 冷启动;前端 POST /api/v1/system/restart 触发)。桌面不编译。
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"
+
 # 独立于根 cargo workspace(自带 Cargo.lock,由 CI/有网络机器生成后提交)
 [workspace]

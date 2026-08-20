@@ -95,6 +95,14 @@ const ZH_CN: Dict = &[
         "现在可以正常使用;重启应用后将先进入 PIN 解锁屏(也可随时在 设置 → 用户 中更换或新建用户)",
     ),
     ("onboard.skip", "稍后再说"),
+    ("onboard.restart", "立即重启(进入锁定屏)"),
+    ("system.restartTitle", "系统"),
+    ("system.restart", "重启服务"),
+    (
+        "system.restartHint",
+        "守护进程或桥接异常时点击重启:在手机上会冷启动应用,重启后需 PIN 解锁",
+    ),
+    ("system.restartErr", "重启失败"),
     ("settings.users", "用户"),
     ("nav.chats", "会话"),
     ("nav.settings", "设置"),
@@ -292,6 +300,14 @@ const EN_US: Dict = &[
         "You can use the app now; after restarting it, the lock screen will ask for the PIN. You can also change or add users anytime under Settings → Users.",
     ),
     ("onboard.skip", "Later"),
+    ("onboard.restart", "Restart now (lock screen)"),
+    ("system.restartTitle", "System"),
+    ("system.restart", "Restart service"),
+    (
+        "system.restartHint",
+        "If the daemon or bridge is stuck, restart the service: on the phone this cold-restarts the app and the PIN lock screen appears.",
+    ),
+    ("system.restartErr", "Restart failed"),
     ("settings.users", "Users"),
     ("nav.chats", "Chats"),
     ("nav.settings", "Settings"),
@@ -459,7 +475,12 @@ mod tests {
         let zh: std::collections::BTreeSet<&str> = ZH_CN.iter().map(|(k, _)| *k).collect();
         let en: std::collections::BTreeSet<&str> = EN_US.iter().map(|(k, _)| *k).collect();
         assert_eq!(zh, en, "zh-CN 与 en-US 键集合必须一致");
-        assert_eq!(zh.len(), 145, "键数变更时同步本断言与 CI 校验");
+        assert_eq!(
+            zh.len(),
+            160,
+            "键数变更时同步本断言与 CI 校验 (got {})",
+            zh.len()
+        );
     }
 
     #[test]

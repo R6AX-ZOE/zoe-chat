@@ -577,6 +577,13 @@ fn OnboardView(ctx: Ctx) -> impl IntoView {
                                 <span class="v" style="color:var(--ok)">OK</span>
                             </div>
                             <p class="note" style="margin-top:8px">{move || ctx.t("onboard.doneHint")}</p>
+                            <button
+                                class="primary"
+                                style="margin-top:14px"
+                                on:click=move |_| do_restart(ctx)
+                            >
+                                {move || ctx.t("onboard.restart")}
+                            </button>
                         }.into_any()
                     } else {
                         view! {
@@ -856,6 +863,16 @@ fn DirectDialogView(ctx: Ctx) -> impl IntoView {
 fn save_theme_lang(ctx: Ctx) {
     spawn_local(async move {
         let _ = api::save_settings(ctx.theme.get().as_str(), ctx.lang.get().as_str()).await;
+    });
+}
+
+/// 重启服务/应用(Android 冷启动 → 锁定屏;桌面无宿主钩子,报错提示)。
+fn do_restart(ctx: Ctx) {
+    spawn_local(async move {
+        match api::system_restart().await {
+            Ok(()) => {}
+            Err(e) => alert(&(ctx.t("system.restartErr") + &format!(" ({e})"))),
+        }
     });
 }
 
@@ -1682,6 +1699,16 @@ fn SettingsView(ctx: Ctx) -> impl IntoView {
                     }.into_any()
                 }).collect::<Vec<AnyView>>()
             }}
+        </div>
+        <div class="panel-section">
+            <h3>{move || ctx.t("system.restartTitle")}</h3>
+            <p class="note" style="margin-bottom:8px">{move || ctx.t("system.restartHint")}</p>
+            <div class="row">
+                <button on:click=move |_| do_restart(ctx)>
+                    <IconView icon=Icon::Restart size=18 />
+                    {move || ctx.t("system.restart")}
+                </button>
+            </div>
         </div>
     }
 }

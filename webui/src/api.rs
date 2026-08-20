@@ -316,6 +316,13 @@ pub async fn pair_stop() -> Result<(), ApiError> {
     Ok(())
 }
 
+/// 重启服务(宿主进程冷启动;Android 上重建 Activity 后进入锁定屏,见 daemon
+/// `system_restart` 与 app relaunch.rs)。桌面返回 404 → 按钮仅内嵌场景可见。
+pub async fn system_restart() -> Result<(), ApiError> {
+    let _: serde_json::Value = request("POST", "/api/v1/system/restart", None).await?;
+    Ok(())
+}
+
 pub async fn pair_verify(peer_id: &str, ok: bool) -> Result<(), ApiError> {
     let _: serde_json::Value = request(
         "POST",

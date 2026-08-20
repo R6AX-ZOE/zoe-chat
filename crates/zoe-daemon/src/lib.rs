@@ -55,7 +55,7 @@ pub struct DaemonConfig {
     pub mobile: bool,
     /// 系统级命令回调(仅内嵌宿主注册):`restart` → 宿主重建进程(移动端冷启动)。
     /// 桌面 CLI 恒 None,`POST /api/v1/system/restart` 返回 404。
-    pub system_hook: Option<Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>>,
+    pub system_hook: Option<crate::state::SystemHook>,
 }
 
 impl DaemonConfig {

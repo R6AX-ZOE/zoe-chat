@@ -53,11 +53,14 @@ pub struct AppState {
     /// 桌面无桥,恒 false → transports 如实上报 down)。
     pub ble_up: AtomicBool,
     /// 系统级命令钩子(仅内嵌宿主注册;桌面 None)。
-    pub system_hook: Option<Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>>,
+    pub system_hook: Option<SystemHook>,
     pub started_at: i64,
 }
 
 pub type SharedState = Arc<AppState>;
+
+/// 系统级命令钩子(宿主应用注册;`"restart"` → 重建进程/冷启动)。
+pub type SystemHook = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // 解锁访问助手

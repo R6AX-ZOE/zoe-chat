@@ -369,7 +369,7 @@ crates/zoe-cli/src/ble.rs            # 小改:--send-env 与收包重组打印(�
 - **结果回传**：GitHub API 在沙箱不可达，CI 把结果（job 状态 + badging + sha256 + 失败时构建日志尾部）
   提交到 **`ci/report`** 分支（force push），本地 `git fetch origin ci/report` 即可验收；
   artifact 名 `zoe-mobile-apk`（Actions 页下载）。
-- cargo 命令**均不用 `--locked`**（沿用坑 6）；CI 以 `--apk` 出通用 release APK（tauri 默认即 release 构建，无 `--release` 参数）。**release 签名坑（2026-08-20）**：tauri 模板 release buildType 不设 signingConfig，产出 APK 未签名，侧载报 `packageInfo is null / 未找到签名`；修复 = `scripts/patch-android-gen.sh` 注入 `release-signing.gradle.kts`，用仓库内 `android/zoe-ci-release.keystore`（开发签名，非生产密钥）签名 release；正式发布由发布者另配 keystore 替换。
+- cargo 命令**均不用 `--locked`**（沿用坑 6）；CI 以 `--apk --split-per-abi` 出 **4 个分 ABI release APK**（arm64-v8a / armeabi-v7a / x86 / x86_64，减小体积，真机只装对应 ABI；产物 `app/build/outputs/apk/<abi>/release/*.apk`）。tauri 默认即 release 构建，无 `--release` 参数。**release 签名坑（2026-08-20）**：tauri 模板 release buildType 不设 signingConfig，产出 APK 未签名，侧载报 `packageInfo is null / 未找到签名`；修复 = `scripts/patch-android-gen.sh` 注入 `release-signing.gradle.kts`，用仓库内 `android/zoe-ci-release.keystore`（开发签名，非生产密钥）签名 release；正式发布由发布者另配 keystore 替换。
 
 ## 关键坑（实测结论，勿重走）
 

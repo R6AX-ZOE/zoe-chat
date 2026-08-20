@@ -111,28 +111,32 @@ jobs:
         working-directory: app
         run: |
           set -o pipefail
-          # release 构建(默认 profile 即 release,无需 --release;签名由 patch-android-gen.sh 注入 CI keystore,可侧载)
-          cargo tauri android build --apk 2>&1 | tee /tmp/build.log
+          # release 构建(默认 profile 即 release,无需 --release;签名由 patch-android-gen.sh 注入 CI keystore,可侧载)。
+          # --split-per-abi:按 arm64-v8a/armeabi-v7a/x86/x86_64 出 4 个独立 APK(减小体积,真机只需对应 ABI)
+          cargo tauri android build --apk --split-per-abi 2>&1 | tee /tmp/build.log
 
       - name: Verify APK
         run: |
-          APK=$(find app/src-tauri/gen/android -name '*.apk' | head -1)
-          test -n "$APK"
-          echo "apk=$APK"
-          ls -la "$APK"
-          sha256sum "$APK"
-          echo "--- signature (must be signed; unsigned release APK cannot be sideloaded) ---"
-          apksigner verify --print-certs "$APK"
-          echo "--- native libs (zoe-core/zoe-transport 编入证明) ---"
-          unzip -l "$APK" | grep -E '\.so$'
-          echo "--- badging ---"
-          aapt dump badging "$APK" | grep -E "^(package|application-label|sdkVersion|targetSdkVersion|native-code)"
+          N=$(find app/src-tauri/gen/android -name '*.apk' | wc -l)
+          test "$N" -eq 4   # 期望 per-ABI 4 个(arm64-v8a/armeabi-v7a/x86/x86_64)
+          for APK in $(find app/src-tauri/gen/android -name '*.apk' | sort); do
+            echo "=== $(basename "$APK") ==="
+            ls -la "$APK"
+            sha256sum "$APK"
+            apksigner verify --print-certs "$APK"
+          done
+          echo "--- native libs per ABI (zoe-core/zoe-transport 编入证明) ---"
+          for APK in $(find app/src-tauri/gen/android -name '*.apk' | sort); do
+            echo "$(basename "$APK"): $(unzip -l "$APK" | grep -c '\.so$') .so, $(unzip -l "$APK" | grep -E '\.so$' | sed 's/.*lib\///' | tr '\n' ' ')"
+          done
+          echo "--- badging (首个) ---"
+          aapt dump badging "$(find app/src-tauri/gen/android -name '*.apk' | sort | head -1)" | grep -E "^(package|application-label|sdkVersion|targetSdkVersion|native-code)"
 
-      - name: Upload APK artifact
+      - name: Upload APK artifacts (per-ABI)
         uses: actions/upload-artifact@v4
         with:
           name: zoe-mobile-apk
-          path: app/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
+          path: app/src-tauri/gen/android/app/build/outputs/apk/*/release/*.apk
           if-no-files-found: error
 
       - name: Publish M1 report to ci/report

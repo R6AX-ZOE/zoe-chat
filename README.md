@@ -73,12 +73,13 @@ cargo run -p zoe-daemon -- --data-dir zoe-data --user <id> --pin 123456   # PIN 
 
 ## 移动端（Android）
 
-完整设计与验收流程见 [docs/tauri-mobile.md](docs/tauri-mobile.md)。CI 产出 release APK（GitHub Actions → `Android Tauri Build` → artifact；CI 用仓库内 `android/zoe-ci-release.keystore` 开发签名，可直接侧载，覆盖安装签名稳定）：
+完整设计与验收流程见 [docs/tauri-mobile.md](docs/tauri-mobile.md)。CI 产出 4 个分 ABI 的 release APK（GitHub Actions → `Android Tauri Build` → artifact，`--split-per-abi` 拆分 arm64-v8a / armeabi-v7a / x86 / x86_64 以减小体积，真机只装对应包；CI 用仓库内 `android/zoe-ci-release.keystore` 开发签名，可直接侧载，签名跨构建稳定）：
 
 ```sh
 # 本地构建（需 Android SDK；gen/android 由 CI 生成，本地用 npx tauri android init）
 cd app
-npx tauri android build --apk   # 默认即 release 构建（tauri 无 --release 参数，仅 --debug 可切回 debug）
+npx tauri android init                     # 首次：生成 gen/android
+npx tauri android build --apk --split-per-abi   # 出 4 个分 ABI release APK
 ```
 
 ## BLE 真机联调（Termux）

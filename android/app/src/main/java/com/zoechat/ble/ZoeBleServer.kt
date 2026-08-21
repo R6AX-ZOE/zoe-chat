@@ -23,6 +23,10 @@ class ZoeBleServer(context: Context, private val listener: Listener) {
     interface Listener {
         fun onLog(line: String)
         fun onFrame(device: BluetoothDevice, header: ZoeFrame.Header?, raw: ByteArray)
+        /** 设备订阅 NOTIFY(进入 SIG Mesh 洪泛邻居)。 */
+        fun onDev(device: BluetoothDevice)
+        /** 设备取消订阅/断开(移出 SIG Mesh 洪泛邻居)。 */
+        fun onUndev(device: BluetoothDevice)
     }
 
     private val appContext: Context = context.applicationContext
@@ -32,6 +36,9 @@ class ZoeBleServer(context: Context, private val listener: Listener) {
 
     private var gattServer: BluetoothGattServer? = null
     private var echo = true
+
+    /** 已订阅 NOTIFY 的设备(SIG Mesh 广播目标 + 连接状态回传)。 */
+    private val subscribed = HashSet<BluetoothDevice>()
 
     private val writeChar = BluetoothGattCharacteristic(
         ZoeFrame.WRITE_UUID,
@@ -62,8 +69,10 @@ class ZoeBleServer(context: Context, private val listener: Listener) {
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED ->
                         listener.onLog("[连接] ${device.address} (${device.name ?: "?"})")
-                    BluetoothProfile.STATE_DISCONNECTED ->
+                    BluetoothProfile.STATE_DISCONNECTED -> {
                         listener.onLog("[断开] ${device.address}")
+                        if (subscribed.remove(device)) listener.onUndev(device)
+                    }
                 }
             }
         }
@@ -124,6 +133,17 @@ class ZoeBleServer(context: Context, private val listener: Listener) {
             if (responseNeeded) {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
+            // 维护订阅集合(SIG Mesh 广播目标;0x0001=enable,0x0000=disable)
+            if (descriptor.uuid == ZoeFrame.CCCD_UUID) {
+                val v = value?.copyOf()
+                val enabled = v != null && v.size == 2 &&
+                    ((v[0].toInt() and 0xFF) or ((v[1].toInt() and 0xFF) shl 8)) != 0
+                if (enabled) {
+                    if (subscribed.add(device)) listener.onDev(device)
+                } else {
+                    subscribed.remove(device)
+                }
+            }
         }
     }
 
@@ -157,5 +177,15 @@ class ZoeBleServer(context: Context, private val listener: Listener) {
     fun sendNotification(device: BluetoothDevice, bytes: ByteArray): Boolean {
         notifyChar.value = bytes
         return gattServer?.notifyCharacteristicChanged(device, notifyChar, false) ?: false
+    }
+
+    /** SIG Mesh 洪泛:向所有已订阅设备广播 PDU。 */
+    fun sendBroadcast(bytes: ByteArray): Int {
+        notifyChar.value = bytes
+        var sent = 0
+        for (d in subscribed) {
+            if (gattServer?.notifyCharacteristicChanged(d, notifyChar, false) == true) sent++
+        }
+        return sent
     }
 }

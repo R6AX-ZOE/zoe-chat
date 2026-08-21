@@ -448,20 +448,31 @@ impl<D: BleDriver> Transport for MeshOverlay<D> {
         self.neighbors.lock().unwrap().iter().cloned().collect()
     }
 
-    async fn send(&self, to: &str, envelope: Envelope) -> Result<(), TransportError> {
+    fn send(
+        &self,
+        to: &str,
+        envelope: Envelope,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TransportError>> + Send>>
+    {
         let msg_id: [u8; 8] = envelope.hash[..8].try_into().unwrap();
         let payload = envelope.encode();
-        let frames = frame_chunks(msg_id, self.ttl, &payload)
-            .map_err(|e| TransportError::Io(e.to_string()))?;
+        let frames = match frame_chunks(msg_id, self.ttl, &payload) {
+            Ok(f) => f,
+            Err(e) => {
+                return Box::pin(async move { Err(TransportError::Io(e.to_string())) });
+            }
+        };
         let to = if to.is_empty() || to == "*" {
             None
         } else {
             Some(to.to_string())
         };
-        self.router_cmd
-            .send(RouterCmd::Send { to, frames })
-            .await
-            .map_err(|_| TransportError::Io("ble router stopped".to_string()))
+        let cmd = self.router_cmd.clone();
+        Box::pin(async move {
+            cmd.send(RouterCmd::Send { to, frames })
+                .await
+                .map_err(|_| TransportError::Io("ble router stopped".to_string()))
+        })
     }
 
     fn subscribe(&self) -> broadcast::Receiver<Inbound> {

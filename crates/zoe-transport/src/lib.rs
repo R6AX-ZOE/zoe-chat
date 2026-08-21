@@ -6,6 +6,9 @@ pub mod loopback;
 #[cfg(feature = "net")]
 pub mod net;
 
+#[cfg(feature = "lan")]
+pub mod lan;
+
 #[cfg(feature = "sigmesh")]
 pub mod sigmesh;
 
@@ -13,8 +16,6 @@ pub mod sigmesh;
 // mobile(android)只启用 ble-mobile,复用同一份帧与存储转发实现。
 #[cfg(any(feature = "ble-linux", feature = "ble-windows", feature = "ble-mobile"))]
 pub mod ble;
-
-use std::future::Future;
 
 use tokio::sync::broadcast;
 use zoe_core::envelope::Envelope;
@@ -49,18 +50,25 @@ pub trait Transport: Send + Sync {
     fn availability(&self) -> Availability;
     /// 当前可达邻居地址。
     fn peers(&self) -> Vec<String>;
+    /// 发送信封(BoxFuture,`'_` 允许借用 self:对象安全,daemon 可持有
+    /// `Arc<dyn Transport>`;实现也可返回 'static 的闭包捕获版)。
     fn send(
         &self,
         to: &str,
         envelope: Envelope,
-    ) -> impl Future<Output = Result<(), TransportError>> + Send;
-    /// 手动拨号(默认不支持;libp2p 等远程传输实现)。
-    fn dial(&self, addr: &str) -> impl Future<Output = Result<(), TransportError>> + Send {
-        async move {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TransportError>> + Send + '_>>;
+    /// 手动拨号(默认不支持;libp2p/lan 等实现)。
+    fn dial(
+        &self,
+        addr: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TransportError>> + Send + '_>>
+    {
+        let addr = addr.to_string();
+        Box::pin(async move {
             Err(TransportError::Io(format!(
                 "transport does not support dialing: {addr}"
             )))
-        }
+        })
     }
     /// 入站信封流(每传输单订阅者)。
     fn subscribe(&self) -> broadcast::Receiver<Inbound>;

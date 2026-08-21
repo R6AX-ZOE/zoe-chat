@@ -2,6 +2,7 @@ package com.zoechat.mobile
 
 import android.Manifest
 import android.content.Intent
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge
@@ -22,6 +23,16 @@ class MainActivity : TauriActivity() {
       arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
     }
     requestPermissions(perms, 100)
+    // 局域网传输:Wi-Fi 组播锁(Rust lan.rs 组播信标需要;漏掉会收不到对端信标)
+    try {
+      val wifi = getSystemService(WIFI_SERVICE) as WifiManager
+      wifi.createMulticastLock("zoe-lan").apply {
+        setReferenceCounted(false)
+        acquire()
+      }
+    } catch (e: Exception) {
+      android.util.Log.w("ZoeMain", "multicast lock failed: ${e.message}")
+    }
     Bridge.start(this)   // 桥生命周期=进程生命周期(坑 10,不用前台 Service)
     attach(this)
   }

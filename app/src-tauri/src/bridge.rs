@@ -49,12 +49,65 @@ impl BridgeStatus {
 struct BridgeInner {
     state: Mutex<BridgeState>,
     last_error: Mutex<Option<String>>,
-    /// 当前连接的 Kotlin 写端;None = 未连接。
+    /// 当前连接:发送给 Kotlin 的命令通道;None = 无连接。
     tx: Mutex<Option<mpsc::Sender<Value>>>,
-    /// accept 循环是否已在跑(保证 start_bridge 幂等)。
+    /// accept 循环已启动标志(避免重复 start_bridge 起多份)。
     listening: AtomicBool,
-    /// 用户请求过启动 BLE;hello 到达后补发 `{"t":"start"}`(幂等)。
+    /// 已请求启动 BLE;hello 建立后补发 `{"t":"start"}`(幂等)。
     start_requested: AtomicBool,
+}
+
+/// SIG Mesh PDU 入站通道(Kotlin GATT 收到的非 zoe 帧字节 → SigMeshStack)。
+static SIG_PDU: OnceLock<tokio::sync::broadcast::Sender<Vec<u8>>> = OnceLock::new();
+/// 已知 BLE 设备(mac 集合,Kotlin `dev`/`undev` 维护;SIG Mesh neighbors)。
+static SIG_DEVICES: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+/// 全局 AppHandle(setup 时注册;bridge 命令与 daemon 线程共用)。
+static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+/// setup 时注册全局 handle(bridge 发送命令、daemon 线程广播 PDU 都用它)。
+pub(crate) fn register_handle(app: AppHandle) {
+    let _ = APP_HANDLE.set(app);
+}
+
+fn app_handle() -> Option<AppHandle> {
+    APP_HANDLE.get().cloned()
+}
+
+fn sig_pdu_tx() -> tokio::sync::broadcast::Sender<Vec<u8>> {
+    SIG_PDU
+        .get_or_init(|| {
+            let (tx, _) = tokio::sync::broadcast::channel(256);
+            tx
+        })
+        .clone()
+}
+
+/// SIG Mesh 洪泛介质接入点(见 lib.rs BridgeSigMeshNet)。
+pub(crate) fn sigmesh_pdu_rx() -> tokio::sync::broadcast::Receiver<Vec<u8>> {
+    sig_pdu_tx().subscribe()
+}
+
+/// SIG Mesh 洪泛介质接入点:向所有已连接 BLE 设备广播 PDU。
+pub(crate) fn sigmesh_broadcast(pdu: &[u8]) {
+    let app = match app_handle() {
+        Some(a) => a,
+        None => return,
+    };
+    send(
+        json!({"t": "send", "a": "*", "d": hex::encode(pdu)}),
+        &app,
+    );
+}
+
+/// SIG Mesh 邻居(已连接的 BLE 设备 mac 列表)。
+pub(crate) fn sigmesh_neighbors() -> Vec<String> {
+    SIG_DEVICES
+        .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+        .lock()
+        .unwrap()
+        .iter()
+        .cloned()
+        .collect()
 }
 
 fn inner() -> &'static BridgeInner {
@@ -259,11 +312,39 @@ async fn on_line(line: &str, app: &AppHandle) {
             let d = v.get("d").and_then(|d| d.as_str()).unwrap_or("");
             emit_log(app, d.to_string());
         }
-        // BLE 收到完整帧(含 13B 头):M1 先转发日志行;M2 起喂 MeshOverlay
+        // BLE 收到帧:0x5A = zoe 帧(仅记录);否则 = SIG Mesh PDU(转发洪泛栈)
         "frame" => {
             let a = v.get("a").and_then(|a| a.as_str()).unwrap_or("?");
             let d = v.get("d").and_then(|d| d.as_str()).unwrap_or("");
-            emit_log(app, format!("[收] 帧 a={a} len={}B d={d}", d.len() / 2));
+            if let Ok(bytes) = hex::decode(d) {
+                if bytes.first() == Some(&0x5A) {
+                    emit_log(app, format!("[收] zoe帧 a={a} len={}B", bytes.len()));
+                } else if !bytes.is_empty() {
+                    emit_log(app, format!("[收] SIG PDU a={a} len={}B", bytes.len()));
+                    let _ = sig_pdu_tx().send(bytes);
+                }
+            }
+        }
+        // Kotlin 设备清单维护(SIG Mesh neighbors;mac 小写)
+        "dev" => {
+            let d = v.get("d").and_then(|d| d.as_str()).unwrap_or("");
+            if !d.is_empty() {
+                SIG_DEVICES
+                    .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+                    .lock()
+                    .unwrap()
+                    .insert(d.to_lowercase());
+            }
+        }
+        "undev" => {
+            let d = v.get("d").and_then(|d| d.as_str()).unwrap_or("");
+            if !d.is_empty() {
+                SIG_DEVICES
+                    .get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+                    .lock()
+                    .unwrap()
+                    .remove(&d.to_lowercase());
+            }
         }
         other => emit_log(app, format!("[桥] 未知消息类型: {other}")),
     }

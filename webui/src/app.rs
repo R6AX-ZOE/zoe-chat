@@ -907,28 +907,13 @@ fn transport_up(ts: &Option<api::TransportStatus>, key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// 当前应展示的传输列表:移动端只挂载 ble + loopback,LAN/net/sigmesh
-/// 为桌面专属(如实 down,但 UI 上隐藏而非显示"故障")。
-fn transport_items(ts: &Option<api::TransportStatus>) -> Vec<(&'static str, &'static str)> {
-    let mobile = ts.as_ref().map(|t| t.platform == "mobile").unwrap_or(false);
-    if mobile {
-        TRANSPORT_ITEMS
-            .iter()
-            .filter(|(k, _)| *k == "ble" || *k == "loopback")
-            .copied()
-            .collect()
-    } else {
-        TRANSPORT_ITEMS.to_vec()
-    }
-}
-
 #[component]
 fn TransportDots(ctx: Ctx) -> impl IntoView {
     view! {
         <span class="transport-dots">
             {move || {
                 let ts = ctx.transports.get();
-                transport_items(&ts).into_iter().map(move |(label, key)| {
+                TRANSPORT_ITEMS.iter().map(move |(label, key)| {
                     let up = transport_up(&ts, key);
                     view! {
                         <span
@@ -1711,8 +1696,9 @@ fn SettingsView(ctx: Ctx) -> impl IntoView {
             <h3>{move || ctx.t("settings.transports")}</h3>
             {move || {
                 let ts = ctx.transports.get();
-                transport_items(&ts).into_iter().map(move |(key, label)| {
+                TRANSPORT_ITEMS.iter().map(move |(key, label)| {
                     let up = transport_up(&ts, key);
+                    let label = *label;
                     view! {
                         <div class="kv">
                             <span class="k">{move || ctx.t(label)}</span>
@@ -1722,12 +1708,6 @@ fn SettingsView(ctx: Ctx) -> impl IntoView {
                         </div>
                     }.into_any()
                 }).collect::<Vec<AnyView>>()
-            }}
-            {move || {
-                let mobile = ctx.transports.get().map(|t| t.platform == "mobile").unwrap_or(false);
-                mobile.then(|| view! {
-                    <p class="note" style="margin-top:8px">{ctx.t("transport.mobileNote")}</p>
-                })
             }}
         </div>
         <div class="panel-section">

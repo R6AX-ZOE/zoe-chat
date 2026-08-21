@@ -73,6 +73,8 @@ async fn run(args: Args) {
         pin: args.pin.clone(),
         mobile: false,
         system_hook: None,
+        #[cfg(feature = "sigmesh")]
+        sigmesh_net: None,
     })
     .await
     .expect("daemon start");

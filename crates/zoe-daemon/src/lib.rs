@@ -32,7 +32,7 @@ use zoe_core::identity::IdentityKeyPair;
 use zoe_core::mls::{MlsIdentity, MlsSession};
 use zoe_core::storage::{Db, ZoeProvider, ZoeStorage};
 use zoe_core::users::{User, UserKind, UserRegistry};
-#[cfg(feature = "net")]
+#[cfg(any(feature = "net", feature = "lan", feature = "sigmesh"))]
 use zoe_transport::Transport;
 
 use crate::state::{now, AppState, SharedState};
@@ -56,6 +56,9 @@ pub struct DaemonConfig {
     /// 系统级命令回调(仅内嵌宿主注册):`restart` → 宿主重建进程(移动端冷启动)。
     /// 桌面 CLI 恒 None,`POST /api/v1/system/restart` 返回 404。
     pub system_hook: Option<crate::state::SystemHook>,
+    /// SIG Mesh 洪泛介质(宿主注入;None = FloodHub mock 单节点)。
+    #[cfg(feature = "sigmesh")]
+    pub sigmesh_net: Option<Arc<dyn state::SigMeshNet>>,
 }
 
 impl DaemonConfig {
@@ -67,6 +70,8 @@ impl DaemonConfig {
             pin: None,
             mobile: false,
             system_hook: None,
+            #[cfg(feature = "sigmesh")]
+            sigmesh_net: None,
         }
     }
 
@@ -84,6 +89,8 @@ impl DaemonConfig {
             pin: None,
             mobile: true,
             system_hook: None,
+            #[cfg(feature = "sigmesh")]
+            sigmesh_net: None,
         }
     }
 }
@@ -323,6 +330,47 @@ fn init_identity_runtime(state: &SharedState, seed: &[u8; 32]) -> Result<(), Dae
         }
     }
 
+    // 局域网传输(组播发现 + TCP 信封流;身份与 net 同源派生)
+    #[cfg(feature = "lan")]
+    {
+        let mut h = Sha256::new();
+        h.update(seed);
+        h.update(b"zoe-lan-v1");
+        let lan_seed: [u8; 32] = h.finalize().into();
+        let lan = zoe_transport::lan::LanTransport::spawn_from_seed(&lan_seed);
+        let mut rx = lan.subscribe();
+        let state_clone = Arc::clone(state);
+        tokio::spawn(async move {
+            while let Ok(inbound) = rx.recv().await {
+                msg::handle_inbound(&state_clone, &inbound.from, &inbound.envelope);
+            }
+        });
+        *state.lan.lock().unwrap() = Some(lan);
+    }
+
+    // SIG Mesh 洪泛堆栈:介质 = 宿主注入(移动端 BLE GATT 桥)或 FloodHub mock
+    #[cfg(feature = "sigmesh")]
+    {
+        use std::time::Duration as StdDuration;
+        use zoe_transport::sigmesh::{FloodHub, SigMeshStack};
+        let net: Arc<dyn state::SigMeshNet> = match state.sigmesh_net.lock().unwrap().clone() {
+            Some(net) => net,
+            None => {
+                let hub = FloodHub::new();
+                Arc::new(hub.register("zoe-desktop-mock"))
+            }
+        };
+        let stack = SigMeshStack::spawn(net, 0, StdDuration::from_millis(0));
+        let mut rx = stack.subscribe();
+        let state_clone = Arc::clone(state);
+        tokio::spawn(async move {
+            while let Ok(inbound) = rx.recv().await {
+                msg::handle_inbound(&state_clone, &inbound.from, &inbound.envelope);
+            }
+        });
+        *state.sigmesh.lock().unwrap() = Some(stack as Arc<dyn Transport + Send + Sync>);
+    }
+
     Ok(())
 }
 
@@ -411,6 +459,10 @@ pub async fn start(config: DaemonConfig) -> Result<Daemon, DaemonError> {
         mobile: config.mobile,
         events: events_tx,
         net: Mutex::new(None),
+        lan: Mutex::new(None),
+        sigmesh: Mutex::new(None),
+        #[cfg(feature = "sigmesh")]
+        sigmesh_net: Mutex::new(config.sigmesh_net.clone()),
         pending_keypackages: Mutex::new(HashMap::new()),
         pairing: std::sync::atomic::AtomicBool::new(false),
         pair_code: Mutex::new(None),

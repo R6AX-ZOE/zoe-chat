@@ -17,6 +17,35 @@ use zoe_transport::ble::{frame_chunks, parse_frame};
 mod bridge;
 mod relaunch;
 
+/// SIG Mesh 洪泛介质:经回环桥把 PDU 广播给所有已连接 BLE 设备(Kotlin GATT),
+/// 入站 PDU 由桥线程转发进广播通道 —— 与 GATT 承载的 SIG Mesh 语义一致。
+struct BridgeSigMeshNet;
+
+impl zoe_transport::sigmesh::SigMeshNet for BridgeSigMeshNet {
+    fn node_id(&self) -> String {
+        "ble-mesh".into()
+    }
+
+    fn neighbors(&self) -> Vec<String> {
+        bridge::sigmesh_neighbors()
+    }
+
+    fn broadcast(
+        &self,
+        pdu: Vec<u8>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), zoe_transport::sigmesh::SigMeshError>> + Send>>
+    {
+        Box::pin(async move {
+            bridge::sigmesh_broadcast(&pdu);
+            Ok(())
+        })
+    }
+
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
+        bridge::sigmesh_pdu_rx()
+    }
+}
+
 /// 内嵌守护进程句柄(managed state)。
 pub struct EmbeddedDaemon {
     pub state: SharedState,
@@ -27,6 +56,9 @@ pub struct EmbeddedDaemon {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            // bridge 全局 handle(SIG Mesh 广播等 daemon 线程发送命令用)
+            bridge::register_handle(app.handle().clone());
+
             // 1) 内嵌守护进程:数据目录 = 应用数据目录;固定端口;移动端模式。
             //    注册系统命令钩子:Web UI 经 POST /api/v1/system/restart 触发
             //    (前端"重启服务"入口,Android 冷启动 App)。
@@ -40,6 +72,8 @@ pub fn run() {
                 "restart" => relaunch::app_restart(),
                 other => Err(format!("unknown system command: {other}")),
             }));
+            // SIG Mesh 介质:BLE GATT 桥(洪泛 PDU ↔ Kotlin 广播)
+            config.sigmesh_net = Some(std::sync::Arc::new(BridgeSigMeshNet));
             let daemon = tauri::async_runtime::block_on(zoe_daemon::start(config))
                 .map_err(|e| format!("embedded daemon start: {e}"))?;
             let daemon_state = daemon.state.clone();

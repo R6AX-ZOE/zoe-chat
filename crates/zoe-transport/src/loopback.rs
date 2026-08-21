@@ -58,7 +58,28 @@ impl Transport for LoopbackTransport {
         self.hub.addrs()
     }
 
-    async fn send(&self, to: &str, envelope: Envelope) -> Result<(), TransportError> {
+    fn send(
+        &self,
+        to: &str,
+        envelope: Envelope,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TransportError>> + Send>>
+    {
+        let this = LoopbackTransport {
+            addr: self.addr.clone(),
+            hub: Arc::clone(&self.hub),
+            own: self.own.clone(),
+        };
+        let to = to.to_string();
+        Box::pin(async move { this.send_impl(&to, envelope).await })
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<Inbound> {
+        self.own.subscribe()
+    }
+}
+
+impl LoopbackTransport {
+    async fn send_impl(&self, to: &str, envelope: Envelope) -> Result<(), TransportError> {
         let tx = self
             .hub
             .peers
@@ -73,9 +94,5 @@ impl Transport for LoopbackTransport {
         })
         .map_err(|_| TransportError::Unreachable(to.to_string()))?;
         Ok(())
-    }
-
-    fn subscribe(&self) -> broadcast::Receiver<Inbound> {
-        self.own.subscribe()
     }
 }

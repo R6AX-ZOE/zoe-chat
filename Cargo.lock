@@ -5223,6 +5223,7 @@ dependencies = [
  "futures-util",
  "hex",
  "libp2p",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
  "uuid",

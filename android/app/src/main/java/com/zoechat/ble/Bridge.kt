@@ -131,7 +131,14 @@ object Bridge {
             when (o.optString("t")) {
                 "start" -> main.post { startBle(o.optString("n", DEFAULT_ADV_NAME)) }
                 "stop" -> main.post { stopBle() }
-                "send" -> main.post { sendFrame(o.optString("a"), o.optString("d")) }
+                "send" -> main.post {
+                    val mac = o.optString("a")
+                    if (mac == "*") {
+                        broadcastBytes(o.optString("d"))
+                    } else {
+                        sendFrame(mac, o.optString("d"))
+                    }
+                }
                 "echo" -> main.post { setEcho(o.optBoolean("v", true)) }
                 else -> log("[桥] 未知命令: ${o.optString("t")}")
             }
@@ -176,9 +183,19 @@ object Bridge {
         log("[桥] echo=${if (v) "开" else "关"}")
     }
 
+    /** SIG Mesh 洪泛:向所有已订阅 GATT 设备广播 PDU。 */
+    private fun broadcastBytes(hexData: String) {
+        val srv = server ?: run {
+            log("[桥] 广播失败: server=null")
+            return
+        }
+        val bytes = hexToBytes(hexData)
+        val n = srv.sendBroadcast(bytes)
+        log("[桥] SIG 洪泛 ${bytes.size}B → $n 台设备")
+    }
+
     /** 向指定 mac 发一帧(hex);设备未订阅通知时 sendNotification 返回 false。 */
-    private fun sendFrame(mac: String, hexData: String) {
-        val srv = server
+    private fun sendFrame(mac: String, hexData: String) {        val srv = server
         val dev = devices[mac] ?: run {
             try {
                 BluetoothAdapter.getDefaultAdapter()?.getRemoteDevice(mac)
@@ -211,6 +228,16 @@ object Bridge {
                     .put("a", device.address)
                     .put("d", hex(raw))
             )
+        }
+
+        override fun onDev(device: BluetoothDevice) {
+            devices[device.address] = device
+            sendNow("dev", JSONObject().put("d", device.address))
+        }
+
+        override fun onUndev(device: BluetoothDevice) {
+            devices.remove(device.address)
+            sendNow("undev", JSONObject().put("d", device.address))
         }
     }
 

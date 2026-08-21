@@ -7,6 +7,8 @@ description = "zoe-chat transport abstraction and implementations"
 [features]
 default = ["net"]
 net = ["dep:libp2p"]
+# 局域网传输(2026-08-21):UDP 组播信标 + TCP 信封流,桌面/移动端共用,无新系统依赖
+lan = []
 ble-linux = ["dep:bluer"]
 ble-windows = ["dep:btleplug", "dep:windows", "dep:windows-future"]
 # mobile(android):复用 ble 模块的帧/MeshOverlay 纯逻辑,无平台驱动
@@ -22,6 +24,7 @@ thiserror = "2"
 hex = "0.4"
 uuid = "1"
 futures-util = "0.3"
+serde_json = "1"
 libp2p = { version = "0.56", features = ["tcp", "tokio", "mdns", "dcutr", "noise", "yamux", "identify", "macros", "request-response", "cbor", "ed25519", "dns"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

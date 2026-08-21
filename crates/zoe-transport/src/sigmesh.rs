@@ -10,7 +10,6 @@
 //! GATT 覆盖网投递 —— 本适配不做跨包分片(SIG Mesh 规范无此语义)。
 
 use std::collections::{HashMap, HashSet};
-use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -121,16 +120,43 @@ pub fn sigmesh_chunks(msg_id: [u8; 4], data: &[u8]) -> Result<Vec<Vec<u8>>, SigM
 
 /// 泛洪网络(网络层)接口。本模块只把完整 PDU 交给它,由它负责
 /// TTL 限跳、网络层去重与多跳转发。
+/// 洪泛网格(洪泛转发)抽象:真实介质 = SIG Mesh 网络(Android 经 BLE GATT 桥),
+/// 测试/缺介质时 = FloodHub mock。
+/// 注:方法签名保证对象安全(BoxFuture),daemon 才能以 `Arc<dyn SigMeshNet>` 持有。
 pub trait SigMeshNet: Send + Sync + 'static {
     fn node_id(&self) -> String;
-    /// 当前可达节点(网络层可达性,含多跳)。
+    /// 当前可达邻居(洪泛下一跳,非对端必达路径)。
     fn neighbors(&self) -> Vec<String>;
-    fn broadcast(&self, pdu: Vec<u8>) -> impl Future<Output = Result<(), SigMeshError>> + Send;
+    fn broadcast(
+        &self,
+        pdu: Vec<u8>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), SigMeshError>> + Send>>;
     fn subscribe(&self) -> broadcast::Receiver<Vec<u8>>;
 }
 
+impl<T: SigMeshNet + ?Sized> SigMeshNet for Arc<T> {
+    fn node_id(&self) -> String {
+        self.as_ref().node_id()
+    }
+
+    fn neighbors(&self) -> Vec<String> {
+        self.as_ref().neighbors()
+    }
+
+    fn broadcast(
+        &self,
+        pdu: Vec<u8>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), SigMeshError>> + Send>> {
+        self.as_ref().broadcast(pdu)
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
+        self.as_ref().subscribe()
+    }
+}
+
 // ---------------------------------------------------------------------------
-// SigMeshStack:应用层分片/重组/去重/重传,实现 Transport trait
+// SigMeshStack:分片/重组/去重/重传,统一暴露 Transport trait
 // ---------------------------------------------------------------------------
 
 struct Reassembly {
@@ -238,20 +264,8 @@ impl<N: SigMeshNet> SigMeshStack<N> {
     }
 }
 
-impl<N: SigMeshNet> Transport for SigMeshStack<N> {
-    fn name(&self) -> &'static str {
-        "sigmesh"
-    }
-
-    fn availability(&self) -> Availability {
-        Availability::Up
-    }
-
-    fn peers(&self) -> Vec<String> {
-        self.net.neighbors()
-    }
-
-    async fn send(&self, to: &str, envelope: Envelope) -> Result<(), TransportError> {
+impl<N: SigMeshNet> SigMeshStack<N> {
+    async fn send_impl(&self, to: &str, envelope: Envelope) -> Result<(), TransportError> {
         if !to.is_empty() && to != "*" && !self.net.neighbors().iter().any(|n| n == to) {
             return Err(TransportError::UnknownPeer(to.to_string()));
         }
@@ -272,6 +286,30 @@ impl<N: SigMeshNet> Transport for SigMeshStack<N> {
             }
         }
         Ok(())
+    }
+}
+
+impl<N: SigMeshNet> Transport for SigMeshStack<N> {
+    fn name(&self) -> &'static str {
+        "sigmesh"
+    }
+
+    fn availability(&self) -> Availability {
+        Availability::Up
+    }
+
+    fn peers(&self) -> Vec<String> {
+        self.net.neighbors()
+    }
+
+    fn send(
+        &self,
+        to: &str,
+        envelope: Envelope,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TransportError>> + Send + '_>>
+    {
+        let to = to.to_string();
+        Box::pin(async move { self.send_impl(&to, envelope).await })
     }
 
     fn subscribe(&self) -> broadcast::Receiver<Inbound> {
@@ -405,6 +443,13 @@ fn handle(core: &Arc<FloodCore>, pkt: FloodPdu) {
     }
 }
 
+impl FloodNode {
+    /// 设置本节点广播 TTL(mock 专用,模拟网络层配置)。
+    pub fn set_ttl(&self, ttl: u8) {
+        *self.core.ttl.lock().unwrap() = ttl;
+    }
+}
+
 impl SigMeshNet for FloodNode {
     fn node_id(&self) -> String {
         self.core.id.clone()
@@ -423,22 +468,20 @@ impl SigMeshNet for FloodNode {
             .collect()
     }
 
-    async fn broadcast(&self, pdu: Vec<u8>) -> Result<(), SigMeshError> {
-        let ttl = *self.core.ttl.lock().unwrap();
-        // 注入自身一跳邻居(ttl 起算 = 自身 TTL)
-        self.core.hub.route(&self.core.id, &self.core.id, pdu, ttl);
-        Ok(())
+    fn broadcast(
+        &self,
+        pdu: Vec<u8>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), SigMeshError>> + Send>> {
+        let this = self.clone();
+        Box::pin(async move {
+            let ttl = *this.core.ttl.lock().unwrap();
+            this.core.hub.route(&this.core.id, &this.core.id, pdu, ttl);
+            Ok(())
+        })
     }
 
     fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
         self.core.out.subscribe()
-    }
-}
-
-impl FloodNode {
-    /// 设置本节点广播 TTL(mock 专用,模拟网络层配置)。
-    pub fn set_ttl(&self, ttl: u8) {
-        *self.core.ttl.lock().unwrap() = ttl;
     }
 }
 

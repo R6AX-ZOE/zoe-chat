@@ -191,10 +191,6 @@ const ZH_CN: Dict = &[
     ("transport.sigmesh", "SIG Mesh"),
     ("transport.up", "可用"),
     ("transport.down", "不可用"),
-    (
-        "transport.mobileNote",
-        "移动端仅支持蓝牙近场与本地回环;局域网 / 互联网打洞 / SIG Mesh 为桌面端功能",
-    ),
     ("common.back", "返回"),
     ("common.close", "关闭"),
     ("common.save", "保存"),
@@ -389,7 +385,6 @@ const EN_US: Dict = &[
     ("transport.sigmesh", "SIG Mesh"),
     ("transport.up", "Up"),
     ("transport.down", "Down"),
-    ("transport.mobileNote", "On mobile only Bluetooth and loopback are available; LAN / Internet (NAT) / SIG Mesh are desktop features"),
     ("common.back", "Back"),
     ("common.close", "Close"),
     ("common.save", "Save"),
@@ -487,7 +482,7 @@ mod tests {
         assert_eq!(zh, en, "zh-CN 与 en-US 键集合必须一致");
         assert_eq!(
             zh.len(),
-            162,
+            161,
             "键数变更时同步本断言与 CI 校验 (got {})",
             zh.len()
         );

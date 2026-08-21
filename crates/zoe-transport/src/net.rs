@@ -143,19 +143,42 @@ impl Transport for NetTransport {
         self.inner.connected.lock().unwrap().clone()
     }
 
-    async fn dial(&self, addr: &str) -> Result<(), TransportError> {
-        NetTransport::dial(self, addr).await
+    fn dial(
+        &self,
+        addr: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TransportError>> + Send>>
+    {
+        let this = Arc::clone(&self.inner);
+        let addr = addr.to_string();
+        Box::pin(async move {
+            let addr: Multiaddr = addr
+                .parse()
+                .map_err(|e| TransportError::Io(format!("invalid multiaddr {addr}: {e}")))?;
+            this.commands
+                .send(Command::Dial(addr))
+                .await
+                .map_err(|_| TransportError::Io("net transport stopped".to_string()))
+        })
     }
 
-    async fn send(&self, to: &str, envelope: Envelope) -> Result<(), TransportError> {
-        let peer: PeerId = to
-            .parse()
-            .map_err(|_| TransportError::UnknownPeer(to.to_string()))?;
-        self.inner
-            .commands
-            .send(Command::Send { peer, envelope })
-            .await
-            .map_err(|_| TransportError::Io("net transport stopped".to_string()))
+    fn send(
+        &self,
+        to: &str,
+        envelope: Envelope,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TransportError>> + Send>>
+    {
+        let inner = Arc::clone(&self.inner);
+        let to = to.to_string();
+        Box::pin(async move {
+            let peer: PeerId = to
+                .parse()
+                .map_err(|_| TransportError::UnknownPeer(to.to_string()))?;
+            inner
+                .commands
+                .send(Command::Send { peer, envelope })
+                .await
+                .map_err(|_| TransportError::Io("net transport stopped".to_string()))
+        })
     }
 
     fn subscribe(&self) -> broadcast::Receiver<Inbound> {

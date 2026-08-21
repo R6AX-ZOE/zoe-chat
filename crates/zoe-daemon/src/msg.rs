@@ -191,7 +191,8 @@ fn sessions_epoch(state: &SharedState, gid: &[u8]) -> u64 {
         .unwrap_or(0)
 }
 
-/// 按会话类型投递信封:私聊定向发给 direct_peer,群聊广播全部已连接 peer。
+/// 按会话类型投递信封:私聊定向发给 direct_peer(经 net),群聊广播全部
+/// 已连接 peer —— net + lan 逐 peer 发送,sigmesh 按洪泛语义发送到全网。
 pub async fn deliver_envelope(state: &SharedState, env: &Envelope) {
     let Some(net) = state::net_handle(state) else {
         return;
@@ -210,13 +211,25 @@ pub async fn deliver_envelope(state: &SharedState, env: &Envelope) {
             }
         }
         None => {
+            // 群广播:net 已知 peer
             let peers = net.peers();
-            if peers.is_empty() {
-                return;
-            }
             for peer in peers {
                 if let Err(e) = net.send(&peer, env.clone()).await {
                     eprintln!("broadcast to {peer}: {e}");
+                }
+            }
+            // 局域网 peer(组播发现)
+            if let Some(lan) = state::lan_handle(state) {
+                for peer in lan.peers() {
+                    if let Err(e) = lan.send(&peer, env.clone()).await {
+                        eprintln!("lan broadcast to {peer}: {e}");
+                    }
+                }
+            }
+            // SIG Mesh:洪泛到全网
+            if let Some(sm) = state::sigmesh_handle(state) {
+                if let Err(e) = sm.send("*", env.clone()).await {
+                    eprintln!("sigmesh flood: {e}");
                 }
             }
         }

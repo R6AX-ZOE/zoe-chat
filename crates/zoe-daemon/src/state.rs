@@ -19,6 +19,17 @@ pub use zoe_transport::net::NetTransport as NetHandle;
 #[derive(Clone, Debug)]
 pub struct NetHandle;
 
+/// 局域网传输句柄(feature `lan` 时 = LanTransport;未启用 = 空类型)。
+#[cfg(feature = "lan")]
+pub use zoe_transport::lan::LanTransport as LanHandle;
+#[cfg(not(feature = "lan"))]
+#[derive(Clone, Debug)]
+pub struct LanHandle;
+
+/// SIG Mesh 洪泛介质(宿主注入:移动端 = BLE GATT 桥;缺省 = FloodHub mock)。
+#[cfg(feature = "sigmesh")]
+pub use zoe_transport::sigmesh::SigMeshNet;
+
 pub struct AppState {
     pub storage: ZoeStorage,
     /// 数据目录(文件自动下载落盘目录 = <data_dir>/files;用户注册表 users.db 所在根)。
@@ -44,6 +55,13 @@ pub struct AppState {
     /// libp2p 远程传输(M3;无 net feature 时为占位)。
     /// Mutex 包装以便解锁后按需装配。
     pub net: Mutex<Option<Arc<NetHandle>>>,
+    /// 局域网传输句柄(feature `lan`;未启用为 None)。
+    pub lan: Mutex<Option<Arc<LanHandle>>>,
+    /// SIG Mesh 洪泛堆栈(transport 句柄;feature `sigmesh`;未启用为 None)。
+    pub sigmesh: Mutex<Option<Arc<dyn zoe_transport::Transport + Send + Sync>>>,
+    /// SIG Mesh 洪泛介质(宿主注入:移动端 = BLE GATT 桥;None = FloodHub mock)。
+    #[cfg(feature = "sigmesh")]
+    pub sigmesh_net: Mutex<Option<Arc<dyn SigMeshNet>>>,
     /// 等待中的 KeyPackage 请求:peer_id → oneshot(邀请流程用)。
     pub pending_keypackages: Mutex<HashMap<String, oneshot::Sender<Vec<u8>>>>,
     /// 配对模式状态(protocol.md §1)。
@@ -134,6 +152,18 @@ pub fn net_handle(state: &SharedState) -> Option<Arc<NetHandle>> {
     state.net.lock().unwrap().clone()
 }
 
+/// 局域网传输句柄(未启用/未解锁时 None)。
+pub fn lan_handle(state: &SharedState) -> Option<Arc<LanHandle>> {
+    state.lan.lock().unwrap().clone()
+}
+
+/// SIG Mesh 堆栈句柄(未启用/未解锁时 None)。
+pub fn sigmesh_handle(
+    state: &SharedState,
+) -> Option<Arc<dyn zoe_transport::Transport + Send + Sync>> {
+    state.sigmesh.lock().unwrap().clone()
+}
+
 // 无 net feature 时,占位 NetHandle 的 Transport 面一律不可用(失败安全,
 // 上层代码无需 cfg 分支)。
 #[cfg(not(feature = "net"))]
@@ -150,14 +180,52 @@ impl zoe_transport::Transport for NetHandle {
         Vec::new()
     }
 
-    async fn send(
+    fn send(
         &self,
         _to: &str,
         _envelope: zoe_core::envelope::Envelope,
-    ) -> Result<(), zoe_transport::TransportError> {
-        Err(zoe_transport::TransportError::Io(
-            "net transport not built (feature `net` disabled)".to_string(),
-        ))
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), zoe_transport::TransportError>> + Send>,
+    > {
+        Box::pin(async {
+            Err(zoe_transport::TransportError::Io(
+                "net transport not built (feature `net` disabled)".to_string(),
+            ))
+        })
+    }
+
+    fn subscribe(&self) -> tokio::sync::broadcast::Receiver<zoe_transport::Inbound> {
+        let (tx, _) = tokio::sync::broadcast::channel(1);
+        tx.subscribe()
+    }
+}
+
+#[cfg(not(feature = "lan"))]
+impl zoe_transport::Transport for LanHandle {
+    fn name(&self) -> &'static str {
+        "lan-unavailable"
+    }
+
+    fn availability(&self) -> zoe_transport::Availability {
+        zoe_transport::Availability::Down
+    }
+
+    fn peers(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn send(
+        &self,
+        _to: &str,
+        _envelope: zoe_core::envelope::Envelope,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), zoe_transport::TransportError>> + Send>,
+    > {
+        Box::pin(async {
+            Err(zoe_transport::TransportError::Io(
+                "lan transport not built (feature `lan` disabled)".to_string(),
+            ))
+        })
     }
 
     fn subscribe(&self) -> tokio::sync::broadcast::Receiver<zoe_transport::Inbound> {

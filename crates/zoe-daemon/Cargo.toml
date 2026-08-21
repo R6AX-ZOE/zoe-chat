@@ -5,9 +5,13 @@ edition.workspace = true
 description = "zoe-chat daemon: local HTTP/WS API + embedded web UI (lib: shared with Tauri mobile)"
 
 [features]
-default = ["net"]
-# libp2p 远程传输(移动端内嵌守护进程时关闭,瘦身)
+default = ["net", "lan", "sigmesh"]
+# libp2p 打洞/直连(移动端已启用,2026-08-21)
 net = ["zoe-transport/net"]
+# 局域网传输(组播发现 + TCP 信封流,桌面/移动端共用)
+lan = ["zoe-transport/lan"]
+# SIG Mesh 洪泛堆栈(真实介质经 DaemonConfig.sigmesh_net 注入;缺省 FloodHub mock)
+sigmesh = ["zoe-transport/sigmesh"]
 
 [dependencies]
 zoe-core = { path = "../zoe-core" }

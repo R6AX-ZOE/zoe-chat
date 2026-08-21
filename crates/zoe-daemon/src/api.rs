@@ -973,15 +973,16 @@ async fn transports(State(state): State<SharedState>) -> ApiResult {
         .map(|n| n.peers().len())
         .unwrap_or(0);
     let ble_up = state.ble_up.load(std::sync::atomic::Ordering::SeqCst);
+    let lan_up = state::lan_handle(&state).is_some();
+    let sigmesh_up = state::sigmesh_handle(&state).is_some();
     Ok(Json(json!({
-        // 平台标记:移动端仅挂载 ble(回环桥)+loopback,LAN/net/sigmesh 桌面专属,
-        // UI 据此隐藏而非显示"故障";desktop 全量展示。
+        // 平台标记:移动端曾用于隐藏桌面专属传输;三项已全部接通,保留字段备用
         "platform": if cfg!(target_os = "android") { "mobile" } else { "desktop" },
         "ble": if ble_up { "up" } else { "down" },
-        "lan": "down",
+        "lan": if lan_up { "up" } else { "down" },
         "net": if net_up { "up" } else { "down" },
         "loopback": "up",
-        "sigmesh": "down",
+        "sigmesh": if sigmesh_up { "up" } else { "down" },
         "net_peers": net_peers,
     })))
 }

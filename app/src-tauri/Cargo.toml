@@ -22,10 +22,11 @@ rand = "0.8"
 tokio = { version = "1", features = ["net", "io-util", "time", "sync", "rt", "macros"] }
 # 复用 Linux 侧同一份代码:帧/分片/去重/TTL/MeshOverlay 来自 zoe-transport::ble,
 # default-features=false 排除 libp2p(net),移动端瘦身
+# 传输栈(2026-08-21 全量接通):ble-mobile(BLE GATT 桥)+ lan(局域网组播/TCP)+
+# net(libp2p 打洞)+ sigmesh(洪泛,介质 = 桥 PDU 通道),daemon 同 feature 挂载
 zoe-core = { path = "../../crates/zoe-core" }
-zoe-transport = { path = "../../crates/zoe-transport", default-features = false, features = ["ble-mobile"] }
-# 内嵌守护进程(Web UI + HTTP/WS API):lib 化 zoe-daemon,关闭 net(libp2p)
-zoe-daemon = { path = "../../crates/zoe-daemon", default-features = false }
+zoe-transport = { path = "../../crates/zoe-transport", default-features = false, features = ["ble-mobile", "lan"] }
+zoe-daemon = { path = "../../crates/zoe-daemon", default-features = false, features = ["net", "lan", "sigmesh"] }
 
 # 系统重启命令(relaunch.rs):仅 Android 目标生效 —— JNI 调 MainActivity.restartApp
 # (重建 Activity 冷启动;前端 POST /api/v1/system/restart 触发)。桌面不编译。

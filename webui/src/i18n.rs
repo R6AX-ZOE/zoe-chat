@@ -175,6 +175,8 @@ const ZH_CN: Dict = &[
         "交换地址后可经 libp2p 直连(打洞)。",
     ),
     ("settings.listenAddr", "监听地址"),
+    ("settings.listenAddr.none", "尚未产生监听地址(传输可能未就绪,请稍候刷新)"),
+    ("settings.listenAddr.unavailable", "网络传输不可用(构建未包含 net 特性)"),
     ("settings.dial", "拨号"),
     ("settings.dial.placeholder", "/ip4/…/tcp/…/p2p/…"),
     ("settings.dial.ok", "拨号已发起"),
@@ -373,6 +375,8 @@ const EN_US: Dict = &[
     ("settings.network", "Network (remote)"),
     ("settings.network.desc", "Exchange addresses to connect directly over libp2p (NAT punching)."),
     ("settings.listenAddr", "Listen address"),
+    ("settings.listenAddr.none", "No listen address yet (transport not ready; refresh later)"),
+    ("settings.listenAddr.unavailable", "Network transport unavailable (built without net feature)"),
     ("settings.dial", "Dial"),
     ("settings.dial.placeholder", "/ip4/…/tcp/…/p2p/…"),
     ("settings.dial.ok", "Dial initiated"),
@@ -490,7 +494,7 @@ mod tests {
         assert_eq!(zh, en, "zh-CN 与 en-US 键集合必须一致");
         assert_eq!(
             zh.len(),
-            165,
+            167,
             "键数变更时同步本断言与 CI 校验 (got {})",
             zh.len()
         );

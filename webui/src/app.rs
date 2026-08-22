@@ -116,7 +116,7 @@ impl Ctx {
             }
             ctx.me.set(api::me().await.ok());
             ctx.card.set(api::card().await.ok());
-            ctx.transports.set(api::transports().await.ok());
+            ctx.refresh_transports();
             ctx.refresh_groups();
             ctx.refresh_peers();
             api::connect_events(Box::new(move |ev| {
@@ -1498,6 +1498,7 @@ fn GroupDetails(ctx: Ctx) -> impl IntoView {
 
 #[component]
 fn SettingsView(ctx: Ctx) -> impl IntoView {
+    ctx.refresh_transports();
     let import_text = RwSignal::new(String::new());
     let import_msg = RwSignal::new(String::new());
     let import_ok = RwSignal::new(false);
@@ -1601,7 +1602,6 @@ fn SettingsView(ctx: Ctx) -> impl IntoView {
     };
 
     let card = ctx.card.get();
-    let net = ctx.net.get();
 
     view! {
         <div class="settings-head">
@@ -1772,12 +1772,29 @@ fn SettingsView(ctx: Ctx) -> impl IntoView {
         <div class="panel-section">
             <h3>{move || ctx.t("settings.network")}</h3>
             <p class="note" style="margin-bottom:8px">{move || ctx.t("settings.network.desc")}</p>
-            {net.as_ref().map(|n| view! {
-                <div class="kv"><span class="k">{move || ctx.t("settings.peerId")}</span><span class="v">{short(&n.peer_id)}</span></div>
-            })}
-            {net.as_ref().and_then(|n| n.listen_addrs.first()).map(|a| view! {
-                <div class="kv"><span class="k">{move || ctx.t("settings.listenAddr")}</span><span class="v">{short(a)}</span></div>
-            })}
+            {move || {
+                match ctx.net.get() {
+                    Some(n) => {
+                        let pid = n.peer_id.clone();
+                        let addrs = n.listen_addrs.clone();
+                        let addrs_for = addrs.clone();
+                        view! {
+                            <div class="kv"><span class="k">{move || ctx.t("settings.peerId")}</span><span class="v">{short(&pid)}</span></div>
+                            <For each=move || addrs_for.clone() key=|a| a.clone() let:a>
+                                <div class="kv"><span class="k">{move || ctx.t("settings.listenAddr")}</span><span class="v">{a}</span></div>
+                            </For>
+                            {move || if addrs.is_empty() {
+                                view! { <p class="note" style="color:var(--danger)">{ctx.t("settings.listenAddr.none")}</p> }.into_any()
+                            } else {
+                                ().into_any()
+                            }}
+                        }.into_any()
+                    }
+                    None => view! {
+                        <p class="note" style="color:var(--danger)">{move || ctx.t("settings.listenAddr.unavailable")}</p>
+                    }.into_any(),
+                }
+            }}
             <div class="kv">
                 <span class="k">{move || ctx.t("settings.netPeers")}</span>
                 <span class="v">{move || ctx.transports.get().map(|t| t.net_peers.to_string()).unwrap_or_else(|| "0".into())}</span>

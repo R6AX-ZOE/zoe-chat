@@ -48,6 +48,16 @@ pub struct Peer {
     pub first_seen: i64,
     #[serde(default)]
     pub last_seen: Option<i64>,
+    /// 联系人登记过的 libp2p 网络标识(未连接过为 None)。
+    #[serde(default)]
+    pub net_peer_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupMember {
+    pub leaf: u32,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,7 +66,10 @@ pub struct Group {
     pub name: Option<String>,
     pub epoch: u64,
     pub coordinator: Option<String>,
-    pub members: Vec<u32>,
+    pub members: Vec<GroupMember>,
+    /// 本机在群中的 leaf(成员名"你"高亮用)。
+    #[serde(default)]
+    pub own_leaf: Option<u32>,
     #[serde(default)]
     pub created_at: i64,
     /// 单聊(私聊)标记:直接与会话列表一起返回。
@@ -365,6 +378,20 @@ pub async fn invite(group_id: &str, addr: &str) -> Result<(), ApiError> {
         Some(format!(
             "{{\"addr\":{}}}",
             serde_json::to_string(addr).unwrap()
+        )),
+    )
+    .await?;
+    Ok(())
+}
+
+/// 按联系人(zoe peer id hex)邀请入群;地址由守护进程从联系人表/LAN 解析。
+pub async fn invite_by_peer(group_id: &str, peer_id: &str) -> Result<(), ApiError> {
+    let _: serde_json::Value = request(
+        "POST",
+        &format!("/api/v1/groups/{}/invite", encode(group_id)),
+        Some(format!(
+            "{{\"peer_id\":{}}}",
+            serde_json::to_string(peer_id).unwrap()
         )),
     )
     .await?;

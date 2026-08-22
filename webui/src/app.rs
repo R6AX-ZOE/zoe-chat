@@ -1064,8 +1064,9 @@ fn ThreadView(ctx: Ctx) -> impl IntoView {
             }
             sending.set(true);
             msg_text.set(String::new());
-            if api::send_message(&gid, &text).await.is_err() {
+            if let Err(e) = api::send_message(&gid, &text).await {
                 msg_text.set(text);
+                alert(&format!("{}: {}", ctx.t("common.failed"), e.1));
             }
             sending.set(false);
             ctx.refresh_messages();
@@ -1127,7 +1128,53 @@ fn ThreadView(ctx: Ctx) -> impl IntoView {
     view! {
         <Show
             when=move || ctx.current_group.get().is_some()
-            fallback=move || view! { <div class="empty-hint">{move || ctx.t("chat.empty")}</div> }
+            fallback=move || view! {
+                <div class="empty-thread">
+                    {move || {
+                        let peers = ctx.peers.get();
+                        let visible: Vec<api::Peer> = peers
+                            .into_iter()
+                            .filter(|p| p.trust_status != 2)
+                            .collect();
+                        if visible.is_empty() {
+                            view! { <div class="empty-hint">{move || ctx.t("chat.empty")}</div> }.into_any()
+                        } else {
+                            view! {
+                                <div class="empty-hint" style="margin-bottom:2px">{move || ctx.t("chat.empty.contactHint")}</div>
+                                <div class="empty-contacts">
+                                    {move || {
+                                        let list = visible.clone();
+                                        list.into_iter().map(move |p| {
+                                            let pid = p.peer_id.clone();
+                                            let name = p.display_name.clone().unwrap_or_else(|| short(&p.fingerprint));
+                                            let chat_name = name.clone();
+                                            view! {
+                                                <div
+                                                    class="group-item contact-item"
+                                                    on:click=move |_| {
+                                                        let pid = pid.clone();
+                                                        let name = chat_name.clone();
+                                                        ctx.start_direct_with(pid, name);
+                                                    }
+                                                >
+                                                    <span class="gicon"><IconView icon=Icon::Key size=16 /></span>
+                                                    <span class="gmeta">
+                                                        <span class="gname">{name}</span>
+                                                        <span class="gsub">{move || ctx.t("chat.direct.new")}</span>
+                                                    </span>
+                                                    <span class="contact-chat" title={move || ctx.t("chat.direct.new")}>
+                                                        <IconView icon=Icon::Chat size=16 />
+                                                    </span>
+                                                </div>
+                                            }.into_any()
+                                        }).collect::<Vec<AnyView>>()
+                                    }}
+                                </div>
+                            }.into_any()
+                        }
+                    }}
+                </div>
+            }
         >
             {move || {
                 let g = ctx.current_group();
@@ -1294,8 +1341,30 @@ fn GroupDetails(ctx: Ctx) -> impl IntoView {
                     invite_ok.set(true);
                     ctx.refresh_groups();
                 }
-                Err(_) => {
-                    invite_msg.set(ctx.t("chat.invite.err"));
+                Err(e) => {
+                    // 展示后端真实原因(超时/地址格式/网络不可达等)
+                    invite_msg.set(format!("{}: {}", ctx.t("chat.invite.err"), e.1));
+                    invite_ok.set(false);
+                }
+            }
+        });
+    };
+
+    let do_invite_peer = move |peer_id: String| {
+        let ctx = ctx;
+        spawn_local(async move {
+            let Some(gid) = ctx.current_group.get() else {
+                return;
+            };
+            invite_msg.set(ctx.t("chat.invite.wait"));
+            match api::invite_by_peer(&gid, &peer_id).await {
+                Ok(()) => {
+                    invite_msg.set(ctx.t("chat.invite.ok"));
+                    invite_ok.set(true);
+                    ctx.refresh_groups();
+                }
+                Err(e) => {
+                    invite_msg.set(format!("{}: {}", ctx.t("chat.invite.err"), e.1));
                     invite_ok.set(false);
                 }
             }
@@ -1327,6 +1396,7 @@ fn GroupDetails(ctx: Ctx) -> impl IntoView {
                 None => ().into_any(),
                 Some(g) => {
                     let members = g.members.clone();
+                    let own_leaf = g.own_leaf;
                     let epoch = g.epoch;
                     let is_direct = g.direct;
                     let peer_id = g.direct_peer_id.clone();
@@ -1344,8 +1414,14 @@ fn GroupDetails(ctx: Ctx) -> impl IntoView {
                                 }.into_any()
                             } else {
                                 view! {
-                                    {move || members.iter().map(|m| {
-                                        let label = format!("{} · leaf {m}", ctx.t("chat.you"));
+                                    {move || members.iter().map(move |m| {
+                                        let label = if Some(m.leaf) == own_leaf {
+                                            format!("{} · leaf {}", ctx.t("chat.you"), m.leaf)
+                                        } else if let Some(n) = &m.name {
+                                            format!("{n} · leaf {}", m.leaf)
+                                        } else {
+                                            format!("{} · leaf {}", ctx.t("chat.member"), m.leaf)
+                                        };
                                         view! { <div class="kv"><span class="k">{label}</span></div> }.into_any()
                                     }).collect::<Vec<AnyView>>()}
                                     <div class="kv"><span class="k">{move || ctx.t("chat.epoch")}</span><span class="v">{epoch}</span></div>
@@ -1368,6 +1444,33 @@ fn GroupDetails(ctx: Ctx) -> impl IntoView {
                                         <button class="primary" on:click=move |_| do_invite()>{move || ctx.t("chat.invite")}</button>
                                         <span class="note" style:color=move || if invite_ok.get() { "var(--ok)" } else { "var(--danger)" }>{move || invite_msg.get()}</span>
                                     </div>
+                                </div>
+                                <div class="panel-section">
+                                    <h3>{move || ctx.t("chat.invite.contact")}</h3>
+                                    <p class="note" style="margin-bottom:8px">{move || ctx.t("chat.invite.contactHint")}</p>
+                                    {move || {
+                                        let peers = ctx.peers.get();
+                                        let visible: Vec<api::Peer> = peers
+                                            .into_iter()
+                                            .filter(|p| p.trust_status != 2)
+                                            .collect();
+                                        if visible.is_empty() {
+                                            view! { <span class="note">{move || ctx.t("peer.none")}</span> }.into_any()
+                                        } else {
+                                            visible.into_iter().map(move |p| {
+                                                let pid = p.peer_id.clone();
+                                                let name = p.display_name.clone().unwrap_or_else(|| short(&p.fingerprint));
+                                                view! {
+                                                    <div class="row" style="justify-content:space-between;margin-bottom:6px">
+                                                        <span class="k">{name}</span>
+                                                        <button class="primary" on:click=move |_| do_invite_peer(pid.clone())>
+                                                            {move || ctx.t("chat.invite")}
+                                                        </button>
+                                                    </div>
+                                                }.into_any()
+                                            }).collect::<Vec<AnyView>>().into_any()
+                                        }
+                                    }}
                                 </div>
                             }.into_any()
                         } else { ().into_any() }}

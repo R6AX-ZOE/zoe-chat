@@ -125,6 +125,7 @@ const ZH_CN: Dict = &[
     ("chat.groupName", "群组名称"),
     ("chat.create", "创建"),
     ("chat.empty", "暂无会话,创建一个群组开始"),
+    ("chat.empty.contactHint", "点击联系人发起单聊"),
     ("chat.placeholder", "输入消息…"),
     ("chat.send", "发送"),
     ("chat.members", "成员"),
@@ -184,6 +185,9 @@ const ZH_CN: Dict = &[
     ("chat.invite.ok", "已邀请"),
     ("chat.invite.err", "邀请失败"),
     ("chat.invite.wait", "邀请中…"),
+    ("chat.invite.contact", "从联系人邀请"),
+    ("chat.invite.contactHint", "点击联系人邀请入群(对方需在线;地址自动从联系人表/局域网解析)"),
+    ("chat.member", "成员"),
     ("transport.ble", "蓝牙近场"),
     ("transport.lan", "局域网"),
     ("transport.net", "互联网打洞"),
@@ -331,6 +335,7 @@ const EN_US: Dict = &[
     ("chat.groupName", "Group name"),
     ("chat.create", "Create"),
     ("chat.empty", "No conversations yet. Create a group to start."),
+    ("chat.empty.contactHint", "Click a contact to start a direct chat"),
     ("chat.placeholder", "Type a message…"),
     ("chat.send", "Send"),
     ("chat.members", "Members"),
@@ -378,6 +383,9 @@ const EN_US: Dict = &[
     ("chat.invite.ok", "Invited"),
     ("chat.invite.err", "Invite failed"),
     ("chat.invite.wait", "Inviting…"),
+    ("chat.invite.contact", "Invite from contacts"),
+    ("chat.invite.contactHint", "Invite a contact by tap (peer must be online; address resolved from contacts/LAN)"),
+    ("chat.member", "Member"),
     ("transport.ble", "Bluetooth"),
     ("transport.lan", "LAN"),
     ("transport.net", "Internet (NAT)"),
@@ -482,7 +490,7 @@ mod tests {
         assert_eq!(zh, en, "zh-CN 与 en-US 键集合必须一致");
         assert_eq!(
             zh.len(),
-            161,
+            165,
             "键数变更时同步本断言与 CI 校验 (got {})",
             zh.len()
         );

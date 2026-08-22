@@ -17,7 +17,7 @@ use openmls_sqlite_storage::{Codec, SqliteStorageProvider};
 use openmls_traits::OpenMlsProvider;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use thiserror::Error;
@@ -95,6 +95,27 @@ CREATE TABLE IF NOT EXISTS transport_state (
   last_ok       INTEGER,
   quality       INTEGER,
   PRIMARY KEY (peer_id, transport)
+);
+CREATE TABLE IF NOT EXISTS group_peers (
+  group_id      BLOB NOT NULL,
+  net_peer_id   TEXT NOT NULL,
+  leaf          INTEGER NOT NULL,
+  PRIMARY KEY (group_id, net_peer_id)
+);
+CREATE TABLE IF NOT EXISTS outbox (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  net_peer_id   TEXT NOT NULL,
+  env           BLOB NOT NULL,
+  env_hash      BLOB NOT NULL,
+  created_at    INTEGER NOT NULL,
+  UNIQUE (net_peer_id, env_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_peer ON outbox(net_peer_id, id);
+CREATE TABLE IF NOT EXISTS sender_seq (
+  group_id      BLOB NOT NULL,
+  sender_leaf   INTEGER NOT NULL,
+  seq           INTEGER NOT NULL,
+  PRIMARY KEY (group_id, sender_leaf)
 );
 "#;
 
@@ -591,9 +612,171 @@ impl ZoeStorage {
             params![group_id],
         )?;
         tx.execute("DELETE FROM groups WHERE group_id = ?1", params![group_id])?;
+        tx.execute(
+            "DELETE FROM group_peers WHERE group_id = ?1",
+            params![group_id],
+        )?;
+        tx.execute(
+            "DELETE FROM sender_seq WHERE group_id = ?1",
+            params![group_id],
+        )?;
         tx.commit()?;
         Ok(())
     }
+
+    // --- group peers(群组成员 → libp2p id → leaf 映射;投递/成员名用) ---
+
+    /// 登记群组成员(协调者邀请时记录被邀方;加入方收到 WELCOME 时记录邀请方)。
+    pub fn add_group_peer(
+        &self,
+        group_id: &[u8],
+        net_peer_id: &str,
+        leaf: u32,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO group_peers (group_id, net_peer_id, leaf) VALUES (?1, ?2, ?3)",
+            params![group_id, net_peer_id, leaf as i64],
+        )?;
+        Ok(())
+    }
+
+    /// 查询群组成员(net_peer_id, leaf)。
+    pub fn group_peers(&self, group_id: &[u8]) -> Result<Vec<GroupPeerRecord>, StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT net_peer_id, leaf FROM group_peers WHERE group_id = ?1 ORDER BY leaf",
+        )?;
+        let rows = stmt.query_map(params![group_id], |r| {
+            Ok(GroupPeerRecord {
+                net_peer_id: r.get(0)?,
+                leaf: r.get::<_, i64>(1)? as u32,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    // --- outbox(离线投递队列:peer 重连后按序冲刷) ---
+
+    /// 追加离线信封到指定 peer 的队列(按信封 hash 去重,幂等)。
+    pub fn outbox_append(
+        &self,
+        net_peer_id: &str,
+        envelope: &[u8],
+        env_hash: &[u8],
+    ) -> Result<(), StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO outbox (net_peer_id, env, env_hash, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![net_peer_id, envelope, env_hash, now_ts()],
+        )?;
+        Ok(())
+    }
+
+    /// 取某 peer 的全部待投递信封(按入队顺序)。
+    pub fn outbox_pending(&self, net_peer_id: &str) -> Result<Vec<OutboxEntry>, StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, env FROM outbox WHERE net_peer_id = ?1 ORDER BY id LIMIT 256")?;
+        let rows = stmt.query_map(params![net_peer_id], |r| {
+            Ok(OutboxEntry {
+                id: r.get(0)?,
+                envelope: r.get(1)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// 有待投递队列的 peer 集合。
+    pub fn outbox_peers(&self) -> Result<Vec<String>, StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT DISTINCT net_peer_id FROM outbox ORDER BY net_peer_id")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// 删除已成功投递的队列条目。
+    pub fn outbox_remove(&self, ids: &[i64]) -> Result<(), StorageError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let conn = self.db.conn.lock().unwrap();
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("DELETE FROM outbox WHERE id IN ({placeholders})");
+        let mut stmt = conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = ids
+            .iter()
+            .map(|i| i as &dyn rusqlite::types::ToSql)
+            .collect();
+        stmt.execute(params.as_slice())?;
+        Ok(())
+    }
+
+    /// 清理超过保留期的队列条目(30 天未重连视为放弃补投)。
+    pub fn outbox_prune(&self, older_than_secs: i64) -> Result<(), StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM outbox WHERE created_at < ?1",
+            params![now_ts() - older_than_secs],
+        )?;
+        Ok(())
+    }
+
+    // --- sender_seq(按 (群组, 发送者 leaf) 独立计数,消除跨发送者撞号) ---
+
+    /// 取该 (群组, leaf) 的下一个序号(自增)。
+    pub fn sender_seq_next(&self, group_id: &[u8], leaf: u32) -> Result<u64, StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        let next: Option<i64> = conn
+            .query_row(
+                "SELECT seq FROM sender_seq WHERE group_id = ?1 AND sender_leaf = ?2",
+                params![group_id, leaf as i64],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let next = next.map(|v| v + 1).unwrap_or(1);
+        conn.execute(
+            "INSERT OR REPLACE INTO sender_seq (group_id, sender_leaf, seq) VALUES (?1, ?2, ?3)",
+            params![group_id, leaf as i64, next],
+        )?;
+        Ok(next as u64)
+    }
+
+    /// 入站消息观测到对端序号:推进本地记录(仅取最大值,防乱序回退)。
+    pub fn sender_seq_observe(
+        &self,
+        group_id: &[u8],
+        leaf: u32,
+        seq: u64,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO sender_seq (group_id, sender_leaf, seq) VALUES (?1, ?2, ?3)
+             ON CONFLICT(group_id, sender_leaf) DO UPDATE SET seq = MAX(seq, excluded.seq)",
+            params![group_id, leaf as i64, seq as i64],
+        )?;
+        Ok(())
+    }
+
+    /// 登记联系人但不动已存在记录(保留已导入的指纹与信任状态)。
+    pub fn ensure_peer(&self, peer_id: &[u8], display_name: &str) -> Result<(), StorageError> {
+        let conn = self.db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO peers (peer_id, fingerprint, display_name, trust_status, first_seen, last_seen)
+             VALUES (?1, ?2, ?3, 0, ?4, ?4)",
+            params![peer_id, peer_id, display_name, now_ts()],
+        )?;
+        Ok(())
+    }
+}
+
+fn now_ts() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone)]
@@ -642,6 +825,20 @@ pub struct MessageRecord {
     pub received_at: i64,
     /// 文件消息是否已下载(已写入本地 files/ 目录)。
     pub file_downloaded: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct GroupPeerRecord {
+    /// 成员的 libp2p peer id(与 peers.net_peer_id / net 传输同格式)。
+    pub net_peer_id: String,
+    /// 成员在 MLS 树中的 leaf 序号。
+    pub leaf: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct OutboxEntry {
+    pub id: i64,
+    pub envelope: Vec<u8>,
 }
 
 // ---------------------------------------------------------------------------

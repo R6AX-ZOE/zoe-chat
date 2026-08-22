@@ -362,6 +362,7 @@ async fn peers_list(State(state): State<SharedState>) -> ApiResult {
                 "trust_status": p.trust_status,
                 "first_seen": p.first_seen,
                 "last_seen": p.last_seen,
+                "net_peer_id": p.net_peer_id,
             })
         })
         .collect::<Vec<_>>())))
@@ -449,12 +450,30 @@ struct CreateGroupReq {
 async fn groups_list(State(state): State<SharedState>) -> ApiResult {
     let records = state.storage.groups().map_err(internal)?;
     let sessions = state.sessions.lock().unwrap();
+    let contacts = state.storage.peers().ok().unwrap_or_default();
     let mut out = Vec::new();
     for g in &records {
-        let members = sessions
-            .get(&g.group_id)
-            .map(|s| s.members())
+        let session = sessions.get(&g.group_id);
+        let members = session.map(|s| s.members()).unwrap_or_default();
+        let own_leaf = session.map(|s| s.own_leaf_index());
+        // 成员名:leaf → group_peers → net_peer_id → 联系人表 display_name
+        let gpeers = state
+            .storage
+            .group_peers(&g.group_id)
+            .ok()
             .unwrap_or_default();
+        let member_list: Vec<serde_json::Value> = members
+            .iter()
+            .map(|leaf| {
+                let name = gpeers.iter().find(|gp| gp.leaf == *leaf).and_then(|gp| {
+                    contacts
+                        .iter()
+                        .find(|c| c.net_peer_id.as_deref() == Some(gp.net_peer_id.as_str()))
+                        .and_then(|c| c.display_name.clone())
+                });
+                json!({ "leaf": leaf, "name": name })
+            })
+            .collect();
         // 私聊:解析对端 zoe peer id(经联系人表 net_peer_id 匹配)与展示名
         let direct = g.direct_peer.is_some();
         let direct_peer_id = g
@@ -465,11 +484,10 @@ async fn groups_list(State(state): State<SharedState>) -> ApiResult {
             direct_peer_id
                 .as_ref()
                 .and_then(|pid| {
-                    state.storage.peers().ok().and_then(|ps| {
-                        ps.into_iter()
-                            .find(|p| &p.peer_id == pid)
-                            .and_then(|p| p.display_name)
-                    })
+                    contacts
+                        .iter()
+                        .find(|p| &p.peer_id == pid)
+                        .and_then(|p| p.display_name.clone())
                 })
                 .or_else(|| g.name.clone())
         } else {
@@ -480,7 +498,8 @@ async fn groups_list(State(state): State<SharedState>) -> ApiResult {
             "name": g.name,
             "epoch": g.epoch,
             "coordinator": g.coordinator.as_ref().map(hex::encode),
-            "members": members,
+            "members": member_list,
+            "own_leaf": own_leaf,
             "created_at": g.created_at,
             "direct": direct,
             "direct_peer": g.direct_peer.as_ref().map(|p| String::from_utf8_lossy(p).to_string()),
@@ -522,6 +541,7 @@ async fn create_group(
         let session = MlsSession::create_group(&*provider, &mls, &gid).map_err(internal)?;
         let epoch = session.epoch();
         let members = session.members();
+        let own_leaf = session.own_leaf_index();
         state.sessions.lock().unwrap().insert(gid.to_vec(), session);
         state
             .storage
@@ -534,7 +554,8 @@ async fn create_group(
             "group_id": hex::encode(gid),
             "name": name,
             "epoch": epoch,
-            "members": members,
+            "members": members.iter().map(|leaf| json!({"leaf": leaf, "name": serde_json::Value::Null})).collect::<Vec<_>>(),
+            "own_leaf": own_leaf,
         })))
     }
 }
@@ -681,19 +702,12 @@ async fn send_plaintext(
             .encrypt(&*provider, &mls, &plaintext)
             .map_err(internal)?;
         let epoch = session.epoch();
+        let leaf = session.own_leaf_index();
         drop(provider);
 
-        // seq = 该群组最后一条 seq + 1
-        let last = state
-            .storage
-            .messages(gid, 1, None)
-            .map_err(internal)?
-            .into_iter()
-            .filter_map(|m| m.seq)
-            .next_back()
-            .unwrap_or(0);
-        let seq = last + 1;
-        let env = Envelope::new(0, MSG_PRIVATE, gid.to_vec(), epoch as u32, 0, seq, ct);
+        // seq 按 (群组, 本机 leaf) 独立计数(不再与其他发送者混用)
+        let seq = state.storage.sender_seq_next(gid, leaf).map_err(internal)?;
+        let env = Envelope::new(0, MSG_PRIVATE, gid.to_vec(), epoch as u32, leaf, seq, ct);
         let hash = env.hash;
         let env_bytes = env.encode();
         (hash, env_bytes, env, epoch, seq)
@@ -722,8 +736,11 @@ async fn send_plaintext(
         .events
         .send(json!({"type":"message","group_id":hex::encode(gid)}).to_string());
 
-    // 投递:私聊定向 / 群聊广播
-    let _ = msg::deliver_envelope(state, &env).await;
+    // 投递:私聊定向 / 群聊广播;无任何通道(含离线队列)时标记失败
+    let delivered = msg::deliver_envelope(state, &env).await;
+    let _ = state
+        .storage
+        .update_message_status(&hash, if delivered { 1 } else { 3 });
 
     Ok(hash)
 }
@@ -1056,7 +1073,10 @@ async fn net_dial(State(state): State<SharedState>, Json(req): Json<DialReq>) ->
 
 #[derive(Deserialize)]
 struct InviteReq {
-    addr: String,
+    #[serde(default)]
+    addr: Option<String>,
+    #[serde(default)]
+    peer_id: Option<String>,
 }
 
 async fn invite(
@@ -1065,7 +1085,7 @@ async fn invite(
     Json(req): Json<InviteReq>,
 ) -> ApiResult {
     let gid = decode_group_id(&gid_hex)?;
-    let result = msg::invite_peer(&state, &gid, &req.addr)
+    let result = msg::invite_peer(&state, &gid, req.addr.as_deref(), req.peer_id.as_deref())
         .await
         .map_err(ApiError::BadRequest)?;
     Ok(Json(result))

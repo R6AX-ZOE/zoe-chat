@@ -374,6 +374,74 @@ fn init_identity_runtime(state: &SharedState, seed: &[u8; 32]) -> Result<(), Dae
     Ok(())
 }
 
+/// 后台投递冲刷任务:周期检查 outbox,对已重连的 peer 按序补投离线期间的信封
+/// (commit 与消息均按入队顺序发送,保证先推进 epoch 再解密;收方按 hash 幂等)。
+fn spawn_outbox_flusher(state: SharedState) {
+    use std::collections::HashSet;
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            if !state::is_unlocked(&state) {
+                continue;
+            }
+            let connected: HashSet<String> = state::net_handle(&state)
+                .map(|n| n.peers().into_iter().collect::<Vec<_>>())
+                .unwrap_or_default()
+                .into_iter()
+                .chain(
+                    state::lan_handle(&state)
+                        .map(|l| l.peers().into_iter().collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                )
+                .collect();
+            if connected.is_empty() {
+                continue;
+            }
+            let Ok(peers) = state.storage.outbox_peers() else {
+                continue;
+            };
+            for peer in peers {
+                if !connected.contains(&peer) {
+                    continue;
+                }
+                let Ok(pending) = state.storage.outbox_pending(&peer) else {
+                    continue;
+                };
+                let mut ok_ids: Vec<i64> = Vec::new();
+                for entry in pending {
+                    let Ok(env) = zoe_core::envelope::Envelope::decode(&entry.envelope) else {
+                        // 损坏条目:直接丢弃,避免卡住队列
+                        ok_ids.push(entry.id);
+                        continue;
+                    };
+                    let mut sent = false;
+                    if let Some(net) = state::net_handle(&state) {
+                        if net.peers().contains(&peer) {
+                            sent = net.send(&peer, env.clone()).await.is_ok();
+                        }
+                    }
+                    if !sent {
+                        if let Some(lan) = state::lan_handle(&state) {
+                            if lan.peers().contains(&peer) {
+                                sent = lan.send(&peer, env).await.is_ok();
+                            }
+                        }
+                    }
+                    if sent {
+                        ok_ids.push(entry.id);
+                    }
+                }
+                if !ok_ids.is_empty() {
+                    let _ = state.storage.outbox_remove(&ok_ids);
+                }
+            }
+            let _ = state.storage.outbox_prune(30 * 24 * 3600);
+        }
+    });
+}
+
 /// 解锁:校验 PIN → 解密种子 → 初始化身份运行时。锁定模式(PIN 用户未带
 /// `--pin` 启动)经由 `/api/v1/unlock` 调用本函数。
 pub fn unlock(state: &SharedState, pin: &str) -> Result<User, DaemonError> {
@@ -481,6 +549,8 @@ pub async fn start(config: DaemonConfig) -> Result<Daemon, DaemonError> {
             }
         }
     }
+
+    spawn_outbox_flusher(Arc::clone(&state));
 
     if state.unlocked.load(Ordering::SeqCst) {
         let _ = state.events.send(

@@ -260,6 +260,24 @@ a { color: var(--accent); }
   padding: 24px;
 }
 
+/* 无会话时主区展示联系人对话入口 */
+.empty-thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+}
+.empty-contacts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 420px;
+  width: 100%;
+  margin: 0 auto;
+}
+
 .thread-input {
   display: flex; gap: 8px;
   padding: 10px 12px calc(10px + var(--sab));

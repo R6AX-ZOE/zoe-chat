@@ -250,6 +250,11 @@ impl MlsSession {
         self.group.epoch().as_u64()
     }
 
+    /// 本设备在 MLS 树中的 leaf 序号(信封 sender 字段 / 成员名解析用)。
+    pub fn own_leaf_index(&self) -> u32 {
+        self.group.own_leaf_index().u32()
+    }
+
     pub fn members(&self) -> Vec<u32> {
         self.group.members().map(|m| m.index.u32()).collect()
     }

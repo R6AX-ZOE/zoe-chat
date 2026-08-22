@@ -9,7 +9,9 @@
 //!
 //! 投递路由:私聊(单聊)信封只发给 `direct_peer`;群聊广播给所有已连接 peer。
 
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde_json::json;
 use zoe_core::content::{self, FileContent};
@@ -57,6 +59,8 @@ pub fn handle_inbound(state: &SharedState, from: &str, env: &Envelope) {
                         Some(&plaintext),
                         now(),
                     );
+                    // 观测对端发送者序号(乱序到达取最大值)
+                    let _ = state.storage.sender_seq_observe(gid, env.sender, env.seq);
                     // 文件消息:小文件自动下载(解密后直接落盘 + 标记)
                     if let Some(f) = content::decode_file(&plaintext) {
                         if f.size <= content::FILE_AUTO_MAX as u64
@@ -85,6 +89,7 @@ pub fn handle_inbound(state: &SharedState, from: &str, env: &Envelope) {
         MSG_WELCOME => match MlsSession::join(&*state.provider.lock().unwrap(), &env.payload) {
             Ok(session) => {
                 let epoch = session.epoch();
+                let own_leaf = session.own_leaf_index();
                 state.sessions.lock().unwrap().insert(gid.clone(), session);
                 let _ = state.storage.create_group(
                     gid,
@@ -93,6 +98,8 @@ pub fn handle_inbound(state: &SharedState, from: &str, env: &Envelope) {
                     None,
                     now(),
                 );
+                // 登记邀请方为群成员(成员名 / 离线补投依赖此映射)
+                let _ = state.storage.add_group_peer(gid, from, own_leaf);
                 let _ = state.events.send(
                     json!({"type":"group","event":"joined","group_id":hex::encode(gid)})
                         .to_string(),
@@ -121,7 +128,8 @@ fn handle_control(state: &SharedState, from: &str, env: &Envelope) {
     let t = v.get("t").and_then(|x| x.as_str()).unwrap_or("");
     match t {
         "kp_req" => {
-            // 对方索要我们的 KeyPackage:发送 MSG_KEY_PACKAGE 信封
+            // 对方索要我们的 KeyPackage:按入站传输回包(net → lan → 队列兜底);
+            // 同时回发 kp_info(本机身份 hex),供对方把联系人 hex ↔ libp2p id 关联。
             let Some(mls) = state::mls_identity(state) else {
                 eprintln!("kp_req: ignored while locked");
                 return;
@@ -136,11 +144,39 @@ fn handle_control(state: &SharedState, from: &str, env: &Envelope) {
             };
             drop(provider);
             let reply = Envelope::new(0, MSG_KEY_PACKAGE, vec![], 0, 0, 0, kp);
-            if let Some(net) = state::net_handle(state) {
-                let from = from.to_string();
-                tokio::spawn(async move {
-                    let _ = net.send(&from, reply).await;
-                });
+            let info = Envelope::new(
+                0,
+                MSG_CONTROL,
+                vec![],
+                0,
+                0,
+                0,
+                serde_json::to_vec(&json!({
+                    "t": "kp_info",
+                    "peer_id": state::identity(state)
+                        .map(|i| hex::encode(i.verifying_key().to_bytes()))
+                        .unwrap_or_default(),
+                }))
+                .unwrap(),
+            );
+            let state_clone = Arc::clone(state);
+            let from = from.to_string();
+            tokio::spawn(async move {
+                let _ = send_peer_envelope(&state_clone, &from, &reply, true).await;
+                let _ = send_peer_envelope(&state_clone, &from, &info, true).await;
+            });
+        }
+        "kp_info" => {
+            // 对方在 KeyPackage 交换中告知身份:关联 联系人 hex ↔ libp2p id
+            if let Some(pid_hex) = v.get("peer_id").and_then(|x| x.as_str()) {
+                if let Ok(pid) = hex::decode(pid_hex) {
+                    let name = format!("peer-{}", &pid_hex[..pid_hex.len().min(8)]);
+                    let _ = state.storage.ensure_peer(&pid, &name);
+                    let _ = state.storage.set_peer_net_id(&pid, from);
+                    let _ = state
+                        .events
+                        .send(json!({"type":"peer","peer_id":pid_hex,"state":"seen"}).to_string());
+                }
             }
         }
         "group_meta" => {
@@ -164,7 +200,8 @@ fn handle_control(state: &SharedState, from: &str, env: &Envelope) {
                             .and_then(|x| x.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let _ = state.storage.upsert_peer(&pid, &pid, &name, 0, now());
+                        // 不覆盖已导入的指纹/信任状态;缺失才登记
+                        let _ = state.storage.ensure_peer(&pid, &name);
                         let _ = state.storage.set_peer_net_id(&pid, from);
                         let _ = state.events.send(
                             json!({"type":"peer","peer_id":pid_hex,"state":"paired"}).to_string(),
@@ -191,11 +228,84 @@ fn sessions_epoch(state: &SharedState, gid: &[u8]) -> u64 {
         .unwrap_or(0)
 }
 
+/// 将信封投递给单个 peer:优先 net(已连接)→ lan(已发现)→ 离线队列(outbox)。
+/// `via_lan` 控制是否尝试 lan 回退(仅对 lan 身份可达的 peer 有意义;
+/// lan 的 peer id 为 hex 公钥,与 libp2p id 不同格式)。
+/// 返回 true = 已交给某传输或已入队;false = 完全不可达。
+pub async fn send_peer_envelope(
+    state: &SharedState,
+    peer: &str,
+    env: &Envelope,
+    via_lan: bool,
+) -> bool {
+    if let Some(net) = state::net_handle(state) {
+        if net.peers().iter().any(|p| p == peer) && net.send(peer, env.clone()).await.is_ok() {
+            return true;
+        }
+    }
+    if via_lan {
+        if let Some(lan) = state::lan_handle(state) {
+            if lan.peers().iter().any(|p| p == peer) && lan.send(peer, env.clone()).await.is_ok() {
+                return true;
+            }
+        }
+    }
+    // 离线:入队,待 peer 重连后由 outbox 冲刷任务按序补投
+    state
+        .storage
+        .outbox_append(peer, &env.encode(), &env.hash)
+        .is_ok()
+}
+
 /// 按会话类型投递信封:私聊定向发给 direct_peer(经 net),群聊广播全部
-/// 已连接 peer —— net + lan 逐 peer 发送,sigmesh 按洪泛语义发送到全网。
-pub async fn deliver_envelope(state: &SharedState, env: &Envelope) {
+/// 已连接 peer —— net + lan 逐 peer 发送,sigmesh 按洪泛语义发送到全网;
+/// 已登记但离线的群成员入 outbox 队列(重连后补投)。
+/// 返回 true = 至少有一个投递通道(直接发送或入队)成功。
+pub async fn deliver_envelope(state: &SharedState, env: &Envelope) -> bool {
     let Some(net) = state::net_handle(state) else {
-        return;
+        // 无 net 传输:私聊兜底 SIG Mesh / LAN;群聊仅 LAN 广播 + 队列
+        let direct_peer = state
+            .storage
+            .group(&env.group_id)
+            .ok()
+            .flatten()
+            .and_then(|g| g.direct_peer);
+        let mut delivered = false;
+        if let Some(pid) = direct_peer {
+            let to = String::from_utf8_lossy(&pid).to_string();
+            if send_peer_envelope(state, &to, env, true).await {
+                delivered = true;
+            }
+        } else {
+            if let Some(lan) = state::lan_handle(state) {
+                for peer in lan.peers() {
+                    if lan.send(&peer, env.clone()).await.is_ok() {
+                        delivered = true;
+                    }
+                }
+            }
+            if let Ok(peers) = state.storage.group_peers(&env.group_id) {
+                let connected: HashSet<String> = state::lan_handle(state)
+                    .map(|l| l.peers().into_iter().collect())
+                    .unwrap_or_default();
+                for m in peers {
+                    if !connected.contains(&m.net_peer_id)
+                        && state
+                            .storage
+                            .outbox_append(&m.net_peer_id, &env.encode(), &env.hash)
+                            .is_ok()
+                    {
+                        delivered = true;
+                    }
+                }
+            }
+        }
+        if let Some(sm) = state::sigmesh_handle(state) {
+            if sm.send("*", env.clone()).await.is_ok() {
+                delivered = true;
+            }
+        }
+        return delivered;
     };
     let direct_peer = state
         .storage
@@ -203,24 +313,23 @@ pub async fn deliver_envelope(state: &SharedState, env: &Envelope) {
         .ok()
         .flatten()
         .and_then(|g| g.direct_peer);
+    let mut delivered = false;
     match direct_peer {
         Some(pid) => {
             let to = String::from_utf8_lossy(&pid).to_string();
-            if let Err(e) = net.send(&to, env.clone()).await {
-                eprintln!("direct send to {to}: {e}");
+            if send_peer_envelope(state, &to, env, true).await {
+                delivered = true;
             }
             // 私聊兜底:net 不可达时仍尝试其余传输(移动端无 relay 时靠
             // SIG Mesh 近场 / LAN 送达)。
             if let Some(sm) = state::sigmesh_handle(state) {
-                if let Err(e) = sm.send("*", env.clone()).await {
-                    eprintln!("direct sigmesh flood: {e}");
+                if sm.send("*", env.clone()).await.is_ok() {
+                    delivered = true;
                 }
             }
             if let Some(lan) = state::lan_handle(state) {
-                if lan.peers().iter().any(|p| *p == to) {
-                    if let Err(e) = lan.send(&to, env.clone()).await {
-                        eprintln!("direct lan send to {to}: {e}");
-                    }
+                if lan.peers().contains(&to) && lan.send(&to, env.clone()).await.is_ok() {
+                    delivered = true;
                 }
             }
         }
@@ -228,26 +337,51 @@ pub async fn deliver_envelope(state: &SharedState, env: &Envelope) {
             // 群广播:net 已知 peer
             let peers = net.peers();
             for peer in peers {
-                if let Err(e) = net.send(&peer, env.clone()).await {
-                    eprintln!("broadcast to {peer}: {e}");
+                if net.send(&peer, env.clone()).await.is_ok() {
+                    delivered = true;
                 }
             }
             // 局域网 peer(组播发现)
             if let Some(lan) = state::lan_handle(state) {
                 for peer in lan.peers() {
-                    if let Err(e) = lan.send(&peer, env.clone()).await {
-                        eprintln!("lan broadcast to {peer}: {e}");
+                    if lan.send(&peer, env.clone()).await.is_ok() {
+                        delivered = true;
                     }
                 }
             }
             // SIG Mesh:洪泛到全网
             if let Some(sm) = state::sigmesh_handle(state) {
-                if let Err(e) = sm.send("*", env.clone()).await {
-                    eprintln!("sigmesh flood: {e}");
+                if sm.send("*", env.clone()).await.is_ok() {
+                    delivered = true;
+                }
+            }
+            // 已登记但当前离线的成员:入队待补投
+            if let Ok(members) = state.storage.group_peers(&env.group_id) {
+                let connected: HashSet<String> = net
+                    .peers()
+                    .into_iter()
+                    .chain(
+                        state::lan_handle(state)
+                            .map(|l| l.peers().into_iter().collect::<Vec<_>>())
+                            .unwrap_or_default(),
+                    )
+                    .collect();
+                for m in members {
+                    if connected.contains(&m.net_peer_id) {
+                        continue;
+                    }
+                    if state
+                        .storage
+                        .outbox_append(&m.net_peer_id, &env.encode(), &env.hash)
+                        .is_ok()
+                    {
+                        delivered = true;
+                    }
                 }
             }
         }
     }
+    delivered
 }
 
 /// 解析 multiaddr 中的 /p2p/<peerid> 段。
@@ -262,17 +396,66 @@ pub fn peer_id_from_addr(addr: &str) -> Option<String> {
     }
 }
 
-/// 邀请流程:向 addr 拨号 → 索要 KeyPackage → 添加成员 → 发送 Welcome/元数据。
+/// 邀请流程:解析目标 → 拨号 → 索要 KeyPackage → 添加成员 → Welcome/元数据/commit。
+///
+/// 目标解析(二选一):
+/// - `addr`:libp2p multiaddr(须含 `/p2p/<peer-id>`),经 net 拨号;
+/// - `peer_hex`:联系人 zoe peer id(hex)。优先取联系人表登记的 net_peer_id;
+///   未登记但已在局域网(组播)发现 → 走 lan 传输完成握手。
+///
+/// commit 投递给既有成员时,离线成员入 outbox 队列(重连后补投,防失步)。
 pub async fn invite_peer(
     state: &SharedState,
     group_id: &[u8],
-    addr: &str,
+    addr: Option<&str>,
+    peer_hex: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    let net = state::net_handle(state).ok_or_else(|| "net transport not available".to_string())?;
-
-    // 解析目标 peer id
-    let peer = peer_id_from_addr(addr)
-        .ok_or_else(|| format!("multiaddr must include /p2p/<peer-id>: {addr}"))?;
+    // 解析目标 peer(格式:libp2p id,或 lan hex id)+ 选路
+    let target: String;
+    let mut via_lan = false;
+    let mut contact_hex: Option<Vec<u8>> = None;
+    if let Some(a) = addr.filter(|a| !a.trim().is_empty()) {
+        let a = a.trim();
+        let net =
+            state::net_handle(state).ok_or_else(|| "net transport not available".to_string())?;
+        let pid = peer_id_from_addr(a)
+            .ok_or_else(|| format!("multiaddr must include /p2p/<peer-id>: {a}"))?;
+        net.dial(a).await.map_err(|e| e.to_string())?;
+        target = pid;
+    } else if let Some(h) = peer_hex.filter(|h| !h.trim().is_empty()) {
+        let h = h.trim();
+        let pid = hex::decode(h).map_err(|_| "bad peer id".to_string())?;
+        contact_hex = Some(pid.clone());
+        // 已登记过 net 标识 → 走 net(可能需拨号,对端须在线)
+        let known = state
+            .storage
+            .peers()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|p| p.peer_id == pid)
+            .and_then(|p| p.net_peer_id)
+            .filter(|n| !n.is_empty());
+        if let Some(n) = known {
+            target = n;
+        } else if let Some(lan) = state::lan_handle(state) {
+            // 未登记 net 标识但局域网已发现(hex id 与 lan 传输同格式)
+            if lan.peers().iter().any(|p| p == h) {
+                target = h.to_string();
+                via_lan = true;
+            } else {
+                return Err(
+                    "peer unreachable: 联系人无网络地址且未被局域网发现(需对方在线)".to_string(),
+                );
+            }
+        } else {
+            return Err("peer unreachable: 联系人无网络地址且局域网传输不可用".to_string());
+        }
+    } else {
+        return Err("invite requires addr or peer_id".to_string());
+    }
+    if target.is_empty() {
+        return Err("unresolved peer id".to_string());
+    }
 
     // 注册 KeyPackage 等待
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -280,10 +463,9 @@ pub async fn invite_peer(
         .pending_keypackages
         .lock()
         .unwrap()
-        .insert(peer.clone(), tx);
+        .insert(target.clone(), tx);
 
-    // 拨号 + 发送 kp_req
-    net.dial(addr).await.map_err(|e| e.to_string())?;
+    // 拨号 + 发送 kp_req(经选定传输)
     let req = Envelope::new(
         0,
         MSG_CONTROL,
@@ -293,31 +475,60 @@ pub async fn invite_peer(
         0,
         serde_json::to_vec(&json!({"t": "kp_req"})).unwrap(),
     );
-    net.send(&peer, req).await.map_err(|e| e.to_string())?;
+    if via_lan {
+        let lan =
+            state::lan_handle(state).ok_or_else(|| "lan transport not available".to_string())?;
+        lan.send(&target, req).await.map_err(|e| e.to_string())?;
+    } else {
+        let net =
+            state::net_handle(state).ok_or_else(|| "net transport not available".to_string())?;
+        net.send(&target, req).await.map_err(|e| e.to_string())?;
+    };
 
     // 等待 KeyPackage(15s 超时)
     let kp_bytes = tokio::time::timeout(std::time::Duration::from_secs(15), rx)
         .await
-        .map_err(|_| "timed out waiting for key package".to_string())?
+        .map_err(|_| "timed out waiting for key package (对方需在线并可达)".to_string())?
         .map_err(|_| "key package channel closed".to_string())?;
 
-    // 添加成员(协调者):返回 (commit, welcome, epoch)
-    let (commit, welcome, epoch) = {
+    // 添加成员(协调者):返回 (commit, welcome, epoch);新成员 leaf = 加入前成员数
+    let (commit, welcome, epoch, new_leaf) = {
         let mls = state::mls_identity(state).ok_or_else(|| "locked".to_string())?;
         let mut sessions = state.sessions.lock().unwrap();
         let session = sessions
             .get_mut(group_id)
             .ok_or_else(|| "group session not found".to_string())?;
+        let new_leaf = session.members().len() as u32;
         let provider = state.provider.lock().unwrap();
         let kp = MlsSession::key_package_from_bytes(&*provider, &kp_bytes)
             .map_err(|e| format!("invalid key package: {e}"))?;
-        session
+        let (commit, welcome, epoch) = session
             .add_member(&*provider, &mls, &kp)
-            .map_err(|e| format!("add member failed: {e}"))?
+            .map_err(|e| format!("add member failed: {e}"))?;
+        (commit, welcome, epoch, new_leaf)
     };
     let _ = state.storage.update_group_epoch(group_id, epoch);
+    // 登记新成员(成员名 / 离线补投依赖)
+    let _ = state.storage.add_group_peer(group_id, &target, new_leaf);
+    // 联系人若在册,回填 net 标识(后续可按联系人直接邀请)
+    if let Some(hex_id) = &contact_hex {
+        let _ = state.storage.set_peer_net_id(hex_id, &target);
+    } else if !via_lan {
+        let net_id = target.clone();
+        if let Some(hex_id) = state
+            .storage
+            .peers()
+            .ok()
+            .into_iter()
+            .flatten()
+            .find(|p| p.net_peer_id.as_deref() == Some(net_id.as_str()))
+            .map(|p| p.peer_id)
+        {
+            let _ = state.storage.set_peer_net_id(&hex_id, &target);
+        }
+    }
 
-    // 发送 WELCOME 给新成员
+    // 发送 WELCOME 给新成员(经选定传输)
     let welcome_env = Envelope::new(
         0,
         MSG_WELCOME,
@@ -327,9 +538,19 @@ pub async fn invite_peer(
         0,
         welcome,
     );
-    net.send(&peer, welcome_env)
-        .await
-        .map_err(|e| e.to_string())?;
+    if via_lan {
+        state::lan_handle(state)
+            .ok_or_else(|| "lan transport not available".to_string())?
+            .send(&target, welcome_env)
+            .await
+            .map_err(|e| e.to_string())?;
+    } else {
+        state::net_handle(state)
+            .ok_or_else(|| "net transport not available".to_string())?
+            .send(&target, welcome_env)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
 
     // 发送群组元数据(名称)
     let name = state
@@ -348,11 +569,14 @@ pub async fn invite_peer(
         0,
         serde_json::to_vec(&json!({"t": "group_meta", "name": name})).unwrap(),
     );
-    let _ = net.send(&peer, meta).await;
+    let _ = send_peer_envelope(state, &target, &meta, via_lan).await;
 
-    // commit 广播给既有成员(排除新成员)
-    let connected: Vec<String> = net.peers();
-    for p in connected.iter().filter(|p| *p != &peer) {
+    // commit 广播给既有成员(排除新成员);离线成员入队待补投
+    let existing = state.storage.group_peers(group_id).ok().unwrap_or_default();
+    for m in existing {
+        if m.net_peer_id == target {
+            continue;
+        }
         let commit_env = Envelope::new(
             0,
             MSG_COMMIT,
@@ -362,14 +586,14 @@ pub async fn invite_peer(
             0,
             commit.clone(),
         );
-        let _ = net.send(p, commit_env).await;
+        let _ = send_peer_envelope(state, &m.net_peer_id, &commit_env, false).await;
     }
 
     let _ = state.events.send(
         json!({"type":"group","event":"member_added","group_id":hex::encode(group_id),"epoch":epoch}).to_string(),
     );
 
-    Ok(json!({ "ok": true, "peer": peer, "epoch": epoch }))
+    Ok(json!({ "ok": true, "peer": target, "epoch": epoch, "leaf": new_leaf }))
 }
 
 /// 发起与联系人的单聊:建立连接 → 索要 KeyPackage → 建双人 MLS 群 → Welcome。
@@ -477,6 +701,8 @@ pub async fn start_direct(
         .storage
         .set_peer_net_id(&pid, &target)
         .map_err(|e| e.to_string())?;
+    // 单聊也是双人 MLS 群:登记成员映射(leaf 1 = 对端)
+    let _ = state.storage.add_group_peer(&gid, &target, 1);
 
     // WELCOME + 元数据(单聊标记 + 本机 peer_id,供对方登记联系人)
     let welcome_env = Envelope::new(0, MSG_WELCOME, gid.to_vec(), epoch as u32, 0, 0, welcome);

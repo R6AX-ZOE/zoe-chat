@@ -42,6 +42,7 @@ object Bridge {
     private var appContext: Context? = null
     private var advertiser: ZoeAdvertiser? = null
     private var server: ZoeBleServer? = null
+    private var scanner: ZoeScanner? = null
     private var echo = true
 
     private val main = Handler(Looper.getMainLooper())
@@ -166,7 +167,11 @@ object Bridge {
         }
         advertiser = adv
         server = srv
-        log("[桥] BLE 已启动(广播名=$name, echo=${if (echo) "开" else "关"})")
+        // 手机↔手机:客户端扫描器(主动连接对端广播;SIG Mesh 洪泛依赖双向链路)
+        val sc = ZoeScanner(ctx, scannerListener)
+        sc.start()
+        scanner = sc
+        log("[桥] BLE 已启动(广播名=$name, echo=${if (echo) "开" else "关"}, 扫描=开)")
     }
 
     private fun stopBle() {
@@ -174,6 +179,8 @@ object Bridge {
         advertiser = null
         server?.stop()
         server = null
+        scanner?.stop()
+        scanner = null
         log("[桥] BLE 已停止")
     }
 
@@ -183,19 +190,46 @@ object Bridge {
         log("[桥] echo=${if (v) "开" else "关"}")
     }
 
-    /** SIG Mesh 洪泛:向所有已订阅 GATT 设备广播 PDU。 */
-    private fun broadcastBytes(hexData: String) {
-        val srv = server ?: run {
-            log("[桥] 广播失败: server=null")
-            return
+    /** 客户端扫描器监听(手机↔手机链路,入站与 server 侧同一 "frame" 通道)。 */
+    private val scannerListener = object : ZoeScanner.Listener {
+        override fun onLog(line: String) {
+            log(line)
         }
-        val bytes = hexToBytes(hexData)
-        val n = srv.sendBroadcast(bytes)
-        log("[桥] SIG 洪泛 ${bytes.size}B → $n 台设备")
+
+        override fun onClientConnected(device: BluetoothDevice) {
+            devices[device.address] = device
+            sendNow("dev", JSONObject().put("d", device.address))
+        }
+
+        override fun onClientDisconnected(device: BluetoothDevice) {
+            devices.remove(device.address)
+            sendNow("undev", JSONObject().put("d", device.address))
+        }
+
+        override fun onFrame(device: BluetoothDevice, raw: ByteArray) {
+            devices[device.address] = device
+            sendNow(
+                "frame",
+                JSONObject()
+                    .put("a", device.address)
+                    .put("d", hex(raw))
+            )
+        }
     }
 
-    /** 向指定 mac 发一帧(hex);设备未订阅通知时 sendNotification 返回 false。 */
-    private fun sendFrame(mac: String, hexData: String) {        val srv = server
+    /** SIG Mesh 洪泛:向所有已订阅 GATT 设备广播 PDU。 */
+    private fun broadcastBytes(hexData: String) {
+        val bytes = hexToBytes(hexData)
+        var n = 0
+        server?.let { n += it.sendBroadcast(bytes) }
+        scanner?.let { n += it.broadcast(bytes) }
+        log("[桥] SIG 洪泛 ${bytes.size}B → $n 条链路")
+    }
+    /** 向指定 mac 发一帧(hex):server 通知 + 客户端写双路,提高命中率。 */
+    private fun sendFrame(mac: String, hexData: String) {
+        val bytes = hexToBytes(hexData)
+        var sent = false
+        val srv = server
         val dev = devices[mac] ?: run {
             try {
                 BluetoothAdapter.getDefaultAdapter()?.getRemoteDevice(mac)
@@ -204,13 +238,14 @@ object Bridge {
                 null
             }
         }
-        if (srv == null || dev == null) {
-            log("[桥] 发送失败: server=${srv != null} device=${dev != null} ($mac)")
-            return
+        if (srv != null && dev != null) {
+            sent = srv.sendNotification(dev, bytes) || sent
         }
-        val bytes = hexToBytes(hexData)
-        log("[桥] 发送 ${bytes.size}B → $mac")
-        srv.sendNotification(dev, bytes)
+        val sc = scanner
+        if (sc != null && dev != null) {
+            sent = sc.write(dev, bytes) || sent
+        }
+        log("[桥] 发送 ${bytes.size}B → $mac ($sent)")
     }
 
     // ---- ZoeBleServer.Listener(主线程) ----

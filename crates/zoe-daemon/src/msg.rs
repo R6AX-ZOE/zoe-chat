@@ -209,6 +209,20 @@ pub async fn deliver_envelope(state: &SharedState, env: &Envelope) {
             if let Err(e) = net.send(&to, env.clone()).await {
                 eprintln!("direct send to {to}: {e}");
             }
+            // 私聊兜底:net 不可达时仍尝试其余传输(移动端无 relay 时靠
+            // SIG Mesh 近场 / LAN 送达)。
+            if let Some(sm) = state::sigmesh_handle(state) {
+                if let Err(e) = sm.send("*", env.clone()).await {
+                    eprintln!("direct sigmesh flood: {e}");
+                }
+            }
+            if let Some(lan) = state::lan_handle(state) {
+                if lan.peers().iter().any(|p| *p == to) {
+                    if let Err(e) = lan.send(&to, env.clone()).await {
+                        eprintln!("direct lan send to {to}: {e}");
+                    }
+                }
+            }
         }
         None => {
             // 群广播:net 已知 peer

@@ -141,6 +141,7 @@ fn send(v: Value, app: &AppHandle) {
     let tx = inner().tx.lock().unwrap().clone();
     match tx {
         Some(tx) => {
+            eprintln!("[bridge] send via conn: {v}");
             if tx.try_send(v).is_err() {
                 emit_log(app, "[桥] 命令通道已关闭,命令丢弃");
             }
@@ -190,7 +191,6 @@ pub(crate) async fn set_echo(v: bool, app: AppHandle) -> Result<String, String> 
     send(json!({"t": "echo", "v": v}), &app);
     Ok("ok".into())
 }
-
 /// 桥状态:connected + 最近一次错误(前端轮询显示)。
 #[tauri::command]
 pub(crate) async fn bridge_status() -> BridgeStatus {
@@ -255,7 +255,7 @@ async fn handle_conn(stream: TcpStream, app: AppHandle) {
     }
 
     // 连接建立:注册写端 + 状态 Connected + 补发未决的 start
-    eprintln!("[bridge] hello 收到,连接建立");
+    eprintln!("[bridge] hello ok, conn established");
     *inner().tx.lock().unwrap() = Some(tx.clone());
     set_state(BridgeState::Connected);
     set_error(None);
@@ -264,28 +264,37 @@ async fn handle_conn(stream: TcpStream, app: AppHandle) {
         let _ = write_line(&mut writer, &json!({"t": "start", "n": DEFAULT_ADV_NAME})).await;
     }
 
-    let mut rx = rx;
-    loop {
-        tokio::select! {
-            line = reader.next_line() => {
-                match line {
-                    Ok(Some(l)) if !l.trim().is_empty() => on_line(&l, &app).await,
-                    Ok(Some(_)) => {}
-                    _ => break, // EOF/读错误 → 断开
-                }
-            }
-            cmd = rx.recv() => {
-                match cmd {
-                    Some(c) => {
-                        if write_line(&mut writer, &c).await.is_err() {
-                            break; // 写失败 → 断开等重连
-                        }
+    // 写任务:命令队列 → 写半(读循环与写任务各持一半,无需锁)
+    let writer_task = tokio::spawn(async move {
+        let mut rx = rx;
+        loop {
+            match rx.recv().await {
+                Some(c) => {
+                    if write_line(&mut writer, &c).await.is_err() {
+                        eprintln!("[bridge] writer: write err, ending");
+                        break;
                     }
-                    None => break,
+                }
+                None => {
+                    eprintln!("[bridge] writer: channel closed, ending");
+                    break;
                 }
             }
         }
+    });
+
+    // 读循环:顺序读行(协议为纯拉取式,无需 select)
+    loop {
+        let line = match reader.next_line().await {
+            Ok(Some(l)) if !l.trim().is_empty() => l,
+            other => {
+                eprintln!("[bridge] read loop end: {other:?}");
+                break;
+            }
+        };
+        on_line(&line, &app).await;
     }
+    writer_task.abort();
 
     // 断开:清写端 + 状态 Disconnected;accept 循环继续等 Kotlin 重连
     eprintln!("[bridge] 连接结束(读 EOF/写失败),清理");

@@ -374,6 +374,75 @@ fn init_identity_runtime(state: &SharedState, seed: &[u8; 32]) -> Result<(), Dae
     Ok(())
 }
 
+/// 连接建立后主动广播本机身份(kp_info 控制信封),使对方把联系人
+/// zoe hex ↔ 网络 id 关联起来 —— 双方在线但从未握手过时,
+/// "按联系人邀请/发起单聊"也能直接可用。每连接会话仅公告一次。
+fn spawn_identity_announcer(state: SharedState) {
+    use std::collections::HashSet;
+    tokio::spawn(async move {
+        let mut announced: HashSet<String> = HashSet::new();
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(3));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            if !state::is_unlocked(&state) {
+                continue;
+            }
+            let Some(own_hex) =
+                state::identity(&state).map(|i| hex::encode(i.verifying_key().to_bytes()))
+            else {
+                continue;
+            };
+            let connected: HashSet<String> = state::net_handle(&state)
+                .map(|n| n.peers().into_iter().collect::<Vec<_>>())
+                .unwrap_or_default()
+                .into_iter()
+                .chain(
+                    state::lan_handle(&state)
+                        .map(|l| l.peers().into_iter().collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                )
+                .collect();
+            // 清理已断开的 peer,重连后可再次公告
+            announced.retain(|p| connected.contains(p));
+            for peer in &connected {
+                if announced.contains(peer) {
+                    continue;
+                }
+                let env = zoe_core::envelope::Envelope::new(
+                    0,
+                    zoe_core::envelope::MSG_CONTROL,
+                    vec![],
+                    0,
+                    0,
+                    0,
+                    serde_json::to_vec(&serde_json::json!({
+                        "t": "kp_info",
+                        "peer_id": own_hex,
+                    }))
+                    .unwrap(),
+                );
+                // 已连接 peer 直接投递(net 优先,lan 兜底),不写队列
+                let mut sent = false;
+                if let Some(net) = state::net_handle(&state) {
+                    if net.peers().contains(peer) {
+                        sent = net.send(peer, env.clone()).await.is_ok();
+                    }
+                }
+                if !sent {
+                    if let Some(lan) = state::lan_handle(&state) {
+                        if lan.peers().contains(peer) {
+                            sent = lan.send(peer, env).await.is_ok();
+                        }
+                    }
+                }
+                let _ = sent;
+                announced.insert(peer.clone());
+            }
+        }
+    });
+}
+
 /// 后台投递冲刷任务:周期检查 outbox,对已重连的 peer 按序补投离线期间的信封
 /// (commit 与消息均按入队顺序发送,保证先推进 epoch 再解密;收方按 hash 幂等)。
 fn spawn_outbox_flusher(state: SharedState) {
@@ -532,6 +601,7 @@ pub async fn start(config: DaemonConfig) -> Result<Daemon, DaemonError> {
         #[cfg(feature = "sigmesh")]
         sigmesh_net: Mutex::new(config.sigmesh_net.clone()),
         pending_keypackages: Mutex::new(HashMap::new()),
+        pending_identity: Mutex::new(Vec::new()),
         pairing: std::sync::atomic::AtomicBool::new(false),
         pair_code: Mutex::new(None),
         ble_up: std::sync::atomic::AtomicBool::new(false),
@@ -551,6 +621,7 @@ pub async fn start(config: DaemonConfig) -> Result<Daemon, DaemonError> {
     }
 
     spawn_outbox_flusher(Arc::clone(&state));
+    spawn_identity_announcer(Arc::clone(&state));
 
     if state.unlocked.load(Ordering::SeqCst) {
         let _ = state.events.send(

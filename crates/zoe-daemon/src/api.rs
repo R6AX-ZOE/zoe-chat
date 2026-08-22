@@ -347,6 +347,15 @@ async fn import_card(State(state): State<SharedState>, Json(req): Json<ImportReq
         .storage
         .upsert_peer(&peer_id, &fp, &display, 0, now())
         .map_err(internal)?;
+    // 连接/握手期收到过该身份公告(尚未导入时暂存)→ 回填网络标识
+    let mut pending = state.pending_identity.lock().unwrap();
+    if let Some(idx) = pending.iter().position(|(h, _)| h == peer_id_hex) {
+        let (_, net_id) = pending.remove(idx);
+        state
+            .storage
+            .set_peer_net_id(&peer_id, &net_id)
+            .map_err(internal)?;
+    }
     Ok(Json(json!({ "ok": true, "peer_id": peer_id_hex })))
 }
 

@@ -167,15 +167,28 @@ fn handle_control(state: &SharedState, from: &str, env: &Envelope) {
             });
         }
         "kp_info" => {
-            // 对方在 KeyPackage 交换中告知身份:关联 联系人 hex ↔ libp2p id
+            // 对方在连接/握手时告知身份:若已在联系人表则回填 net_peer_id;
+            // 尚未导入名片 → 暂存映射,导入时由 import_card 回填。
             if let Some(pid_hex) = v.get("peer_id").and_then(|x| x.as_str()) {
                 if let Ok(pid) = hex::decode(pid_hex) {
-                    let name = format!("peer-{}", &pid_hex[..pid_hex.len().min(8)]);
-                    let _ = state.storage.ensure_peer(&pid, &name);
-                    let _ = state.storage.set_peer_net_id(&pid, from);
-                    let _ = state
-                        .events
-                        .send(json!({"type":"peer","peer_id":pid_hex,"state":"seen"}).to_string());
+                    let exists = state
+                        .storage
+                        .peers()
+                        .map(|ps| ps.iter().any(|p| p.peer_id == pid))
+                        .unwrap_or(false);
+                    if exists {
+                        let _ = state.storage.set_peer_net_id(&pid, from);
+                        let _ = state.events.send(
+                            json!({"type":"peer","peer_id":pid_hex,"state":"seen"}).to_string(),
+                        );
+                    } else {
+                        let mut pending = state.pending_identity.lock().unwrap();
+                        pending.retain(|(h, _)| h != pid_hex);
+                        pending.push((pid_hex.to_string(), from.to_string()));
+                        if pending.len() > 128 {
+                            pending.remove(0);
+                        }
+                    }
                 }
             }
         }
@@ -426,7 +439,7 @@ pub async fn invite_peer(
         let h = h.trim();
         let pid = hex::decode(h).map_err(|_| "bad peer id".to_string())?;
         contact_hex = Some(pid.clone());
-        // 已登记过 net 标识 → 走 net(可能需拨号,对端须在线)
+        // 已登记过网络标识 → 按当前可达性选路(net 优先,lan 兜底)
         let known = state
             .storage
             .peers()
@@ -436,15 +449,28 @@ pub async fn invite_peer(
             .and_then(|p| p.net_peer_id)
             .filter(|n| !n.is_empty());
         if let Some(n) = known {
-            target = n;
+            let net_online = state::net_handle(state)
+                .map(|net| net.peers().iter().any(|p| p == &n))
+                .unwrap_or(false);
+            let lan_online = state::lan_handle(state)
+                .map(|lan| lan.peers().iter().any(|p| p == &n))
+                .unwrap_or(false);
+            if net_online {
+                target = n;
+            } else if lan_online {
+                target = n;
+                via_lan = true;
+            } else {
+                return Err("peer offline: 联系人不在线,无法完成 KeyPackage 握手".to_string());
+            }
         } else if let Some(lan) = state::lan_handle(state) {
-            // 未登记 net 标识但局域网已发现(hex id 与 lan 传输同格式)
+            // 未登记网络标识但局域网已发现(hex id 与 lan 传输同格式)
             if lan.peers().iter().any(|p| p == h) {
                 target = h.to_string();
                 via_lan = true;
             } else {
                 return Err(
-                    "peer unreachable: 联系人无网络地址且未被局域网发现(需对方在线)".to_string(),
+                    "peer unreachable: 联系人网络标识尚未确认(连接建立后数秒内自动交换身份),请稍后重试或先手动拨号对方".to_string(),
                 );
             }
         } else {

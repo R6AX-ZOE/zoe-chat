@@ -64,6 +64,9 @@ pub struct AppState {
     pub sigmesh_net: Mutex<Option<Arc<dyn SigMeshNet>>>,
     /// 等待中的 KeyPackage 请求:peer_id → oneshot(邀请流程用)。
     pub pending_keypackages: Mutex<HashMap<String, oneshot::Sender<Vec<u8>>>>,
+    /// 连接/握手时收到的身份公告(zoe hex, 网络 id),但联系人尚未导入名片:
+    /// import_card 时回填 net_peer_id(容量上限 128,FIFO)。
+    pub pending_identity: Mutex<Vec<(String, String)>>,
     /// 配对模式状态(protocol.md §1)。
     pub pairing: AtomicBool,
     pub pair_code: Mutex<Option<[u8; 8]>>,

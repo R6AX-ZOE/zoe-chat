@@ -10,6 +10,7 @@
 //! 需要 feature `net`(默认开启)。
 
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -18,9 +19,10 @@ use libp2p::request_response::{self, ProtocolSupport};
 use libp2p::swarm::dial_opts::DialOpts;
 use libp2p::swarm::{NetworkBehaviour, Swarm, SwarmEvent};
 use libp2p::{
-    dcutr, identify, identity::Keypair, mdns, Multiaddr, PeerId, StreamProtocol, SwarmBuilder,
+    dcutr, identify, identity::Keypair, mdns, multiaddr::Protocol, Multiaddr, PeerId,
+    StreamProtocol, SwarmBuilder,
 };
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use zoe_core::envelope::Envelope;
 
 use crate::{Availability, Inbound, Transport, TransportError};
@@ -65,8 +67,14 @@ impl Behaviour {
 }
 
 enum Command {
-    Dial(Multiaddr),
-    Send { peer: PeerId, envelope: Envelope },
+    Dial {
+        addr: Multiaddr,
+        ack: oneshot::Sender<Result<(), String>>,
+    },
+    Send {
+        peer: PeerId,
+        envelope: Envelope,
+    },
 }
 
 struct NetInner {
@@ -118,15 +126,46 @@ impl NetTransport {
         self.inner.listen_addrs.lock().unwrap().clone()
     }
 
+    /// 对外可达的拨号地址:监听在通配地址(0.0.0.0/::)时,把 IP 替换为
+    /// 本机实际出口地址,并附上 /p2p/<peer-id>(供对端粘贴直接拨号)。
+    pub fn dial_addrs(&self) -> Vec<String> {
+        let addrs = self.inner.listen_addrs.lock().unwrap().clone();
+        let pid = self.inner.peer_id.to_string();
+        let v4 = local_ips();
+        let mut out = Vec::new();
+        for a in addrs {
+            let Ok(parsed) = a.parse::<Multiaddr>() else {
+                continue;
+            };
+            let mut rebuilt = Multiaddr::empty();
+            for p in parsed.iter() {
+                match p {
+                    Protocol::Ip4(ip) if ip.is_unspecified() => match v4 {
+                        Some(ip4) => rebuilt.push(Protocol::Ip4(ip4)),
+                        None => continue,
+                    },
+                    Protocol::Ip6(ip) if ip.is_unspecified() => continue,
+                    other => rebuilt.push(other),
+                }
+            }
+            out.push(format!("{rebuilt}/p2p/{pid}"));
+        }
+        out
+    }
+
     pub async fn dial(&self, addr: &str) -> Result<(), TransportError> {
         let addr: Multiaddr = addr
             .parse()
             .map_err(|e| TransportError::Io(format!("invalid multiaddr {addr}: {e}")))?;
+        let (tx, rx) = oneshot::channel();
         self.inner
             .commands
-            .send(Command::Dial(addr))
+            .send(Command::Dial { addr, ack: tx })
             .await
-            .map_err(|_| TransportError::Io("net transport stopped".to_string()))
+            .map_err(|_| TransportError::Io("net transport stopped".to_string()))?;
+        rx.await
+            .map_err(|_| TransportError::Io("net transport stopped".to_string()))?
+            .map_err(TransportError::Io)
     }
 }
 
@@ -146,18 +185,22 @@ impl Transport for NetTransport {
     fn dial(
         &self,
         addr: &str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TransportError>> + Send>>
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), TransportError>> + Send + '_>>
     {
-        let this = Arc::clone(&self.inner);
         let addr = addr.to_string();
         Box::pin(async move {
             let addr: Multiaddr = addr
                 .parse()
                 .map_err(|e| TransportError::Io(format!("invalid multiaddr {addr}: {e}")))?;
-            this.commands
-                .send(Command::Dial(addr))
+            let (tx, rx) = oneshot::channel();
+            self.inner
+                .commands
+                .send(Command::Dial { addr, ack: tx })
                 .await
-                .map_err(|_| TransportError::Io("net transport stopped".to_string()))
+                .map_err(|_| TransportError::Io("net transport stopped".to_string()))?;
+            rx.await
+                .map_err(|_| TransportError::Io("net transport stopped".to_string()))?
+                .map_err(TransportError::Io)
         })
     }
 
@@ -186,6 +229,29 @@ impl Transport for NetTransport {
     }
 }
 
+/// 本机实际出口地址:通过 UDP "connect"(不发包)取默认路由出口 IPv4。
+fn local_ips() -> Option<Ipv4Addr> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    match sock.local_addr().ok()?.ip() {
+        IpAddr::V4(v4) => Some(v4),
+        _ => None,
+    }
+}
+
+fn parse_dial_addr(addr: Multiaddr) -> (Multiaddr, Option<PeerId>) {
+    let mut addr = addr;
+    let pid = match addr.pop() {
+        Some(Protocol::P2p(id)) => Some(id),
+        Some(p) => {
+            addr.push(p);
+            None
+        }
+        None => None,
+    };
+    (addr, pid)
+}
+
 async fn run_swarm(keypair: Keypair, mut commands: mpsc::Receiver<Command>, inner: Arc<NetInner>) {
     let mut swarm = match build_swarm(keypair) {
         Ok(s) => s,
@@ -209,9 +275,18 @@ async fn run_swarm(keypair: Keypair, mut commands: mpsc::Receiver<Command>, inne
         tokio::select! {
             cmd = commands.recv() => {
                 match cmd {
-                    Some(Command::Dial(addr)) => {
-                        let _ = swarm
-                            .dial(DialOpts::unknown_peer_id().address(addr).build());
+                    Some(Command::Dial { addr, ack }) => {
+                        let (base, pid) = parse_dial_addr(addr);
+                        let r = if pid.is_some_and(|p| swarm.is_connected(&p)) {
+                            Ok(())
+                        } else {
+                            let opts = match pid {
+                                Some(p) => DialOpts::peer_id(p).addresses(vec![base]).build(),
+                                None => DialOpts::unknown_peer_id().address(base).build(),
+                            };
+                            swarm.dial(opts).map_err(|e| e.to_string())
+                        };
+                        let _ = ack.send(r);
                     }
                     Some(Command::Send { peer, envelope }) => {
                         let connected = swarm.connected_peers().any(|p| *p == peer);

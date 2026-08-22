@@ -1542,9 +1542,10 @@ fn SettingsView(ctx: Ctx) -> impl IntoView {
                 Ok(()) => {
                     dial_msg.set(ctx.t("settings.dial.ok"));
                     dial_ok.set(true);
+                    ctx.refresh_transports();
                 }
-                Err(_) => {
-                    dial_msg.set(ctx.t("settings.dial.err"));
+                Err(e) => {
+                    dial_msg.set(ctx.t("settings.dial.err") + &format!(" ({})", e.1));
                     dial_ok.set(false);
                 }
             }

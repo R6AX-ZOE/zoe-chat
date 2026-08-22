@@ -1049,12 +1049,9 @@ async fn net_addr(State(state): State<SharedState>) -> ApiResult {
 #[cfg(feature = "net")]
 fn net_addr_impl(net: &crate::state::NetHandle) -> ApiResult {
     let pid = net.local_peer_id().to_string();
-    // 每个监听地址附上 /p2p/<peer-id>,供邀请流程解析目标身份
-    let addrs: Vec<String> = net
-        .listen_addrs()
-        .iter()
-        .map(|a| format!("{a}/p2p/{pid}"))
-        .collect();
+    // 可达地址(通配 0.0.0.0/:: 已替换为本机出口 IP),每条约含 /p2p/<peer-id>,
+    // 供对端粘贴直接拨号
+    let addrs = net.dial_addrs();
     Ok(Json(json!({
         "peer_id": pid,
         "listen_addrs": addrs,
